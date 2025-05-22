@@ -2,7 +2,11 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::ItemImpl;
 use syn::{ItemEnum, ItemFn, ItemStruct, Pat, parse_macro_input};
-use mojes_mojo::*;
+
+use mojes_mojo::format_rust_type;
+use mojes_mojo::generate_js_class_for_struct;
+use mojes_mojo::generate_js_enum;
+use mojes_mojo::rust_block_to_js;
 
 #[proc_macro_attribute]
 pub fn impl_to_js(_attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -158,4 +162,3 @@ pub fn js_type(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     error.to_compile_error().into()
 }
-
