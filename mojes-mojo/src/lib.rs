@@ -544,9 +544,7 @@ pub fn rust_block_to_js(block: &Block) -> String {
                     }
                 }
             }
-            Stmt::Macro(mac_stmt) => {
-                 handle_macro_expr(&mac_stmt.mac)
-            }
+            Stmt::Macro(mac_stmt) => handle_macro_expr(&mac_stmt.mac),
             // Remove unsupported Stmt variants
             x => panic!("Unsupported statement {:?}", &x), //"  /* Unsupported statement */\n".to_string(),
         };

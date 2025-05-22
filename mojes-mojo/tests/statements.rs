@@ -1,7 +1,7 @@
 // tests/statements.rs
+use boa_engine::{Context, JsResult, JsValue, Source};
 use mojes_mojo::*;
-use boa_engine::{Context, Source, JsResult, JsValue};
-use syn::{parse_quote, Block, Stmt};
+use syn::{Block, Stmt, parse_quote};
 
 // Helper function to evaluate JS and get result
 fn eval_js(code: &str) -> JsResult<JsValue> {
@@ -23,17 +23,17 @@ fn test_variable_declarations() {
             let x = 5;
         }
     };
-    
+
     let js_code = rust_block_to_js(&block);
     assert!(js_code.contains("const x = 5"));
-    
+
     // Mutable let binding
     let block: Block = parse_quote! {
         {
             let mut y = 10;
         }
     };
-    
+
     let js_code = rust_block_to_js(&block);
     assert!(js_code.contains("let y = 10"));
 }
@@ -48,7 +48,7 @@ fn test_variable_declarations_with_types() {
             let active = true;
         }
     };
-    
+
     let js_code = rust_block_to_js(&block);
     assert!(js_code.contains("const name = \"Alice\""));
     assert!(js_code.contains("const age = 30"));
@@ -64,7 +64,7 @@ fn test_variable_without_initialization() {
             let mut y;
         }
     };
-    
+
     let js_code = rust_block_to_js(&block);
     // Both should become 'let' in JS since they're uninitialized
     assert!(js_code.contains("let x;"));
@@ -80,7 +80,7 @@ fn test_expression_statements() {
             func_call();
         }
     };
-    
+
     let js_code = rust_block_to_js(&block);
     assert!(js_code.contains("x + y;"));
     assert!(js_code.contains("func_call();"));
@@ -94,17 +94,17 @@ fn test_return_statements() {
             return 42;
         }
     };
-    
+
     let js_code = rust_block_to_js(&block);
     assert!(js_code.contains("return 42;"));
-    
+
     // Return without semicolon (implicit return)
     let block: Block = parse_quote! {
         {
             42
         }
     };
-    
+
     let js_code = rust_block_to_js(&block);
     assert!(js_code.contains("return 42;"));
 }
@@ -117,17 +117,17 @@ fn test_destructuring_patterns() {
             let (x, y) = point;
         }
     };
-    
+
     let js_code = rust_block_to_js(&block);
     assert!(js_code.contains("const [x, y] = point"));
-    
+
     // Struct destructuring
     let block: Block = parse_quote! {
         {
             let Person { name, age } = person;
         }
     };
-    
+
     let js_code = rust_block_to_js(&block);
     assert!(js_code.contains("const { name, age } = person"));
 }
@@ -142,7 +142,7 @@ fn test_block_execution_simple() {
             x + y
         }
     };
-    
+
     let js_code = rust_block_to_js(&block);
     let result = eval_block_as_function(&js_code).unwrap();
     assert_eq!(result.as_number().unwrap(), 15.0);
@@ -158,7 +158,7 @@ fn test_block_execution_with_mutations() {
             counter
         }
     };
-    
+
     let js_code = rust_block_to_js(&block);
     let result = eval_block_as_function(&js_code).unwrap();
     assert_eq!(result.as_number().unwrap(), 2.0);
@@ -175,7 +175,7 @@ fn test_nested_blocks() {
             }
         }
     };
-    
+
     let js_code = rust_block_to_js(&block);
     // Should contain the nested structure
     assert!(js_code.contains("const x = 1"));
@@ -193,7 +193,7 @@ fn test_multiple_statements() {
             result
         }
     };
-    
+
     let js_code = rust_block_to_js(&block);
     let result = eval_block_as_function(&js_code).unwrap();
     assert_eq!(result.as_number().unwrap(), 6.0);
@@ -208,7 +208,7 @@ fn test_function_calls_in_statements() {
             value
         }
     };
-    
+
     let js_code = rust_block_to_js(&block);
     assert!(js_code.contains("console.log"));
     assert!(js_code.contains("const value = calculate(5, 3)"));
@@ -224,7 +224,7 @@ fn test_method_calls_in_statements() {
             vec.len()
         }
     };
-    
+
     let js_code = rust_block_to_js(&block);
     assert!(js_code.contains("let vec = create_vec()"));
     assert!(js_code.contains("vec.push(42)"));
@@ -241,7 +241,7 @@ fn test_assignment_statements() {
             x
         }
     };
-    
+
     let js_code = rust_block_to_js(&block);
     assert!(js_code.contains("let x = 0"));
     assert!(js_code.contains("x = 5"));
@@ -257,7 +257,7 @@ fn test_complex_expressions_in_statements() {
             result
         }
     };
-    
+
     let js_code = rust_block_to_js(&block);
     assert!(js_code.contains("const result = (a + b) * (c - d)"));
     assert!(js_code.contains("const flag = x > 0 && y < 10"));
@@ -273,7 +273,7 @@ fn test_array_operations_in_statements() {
             first
         }
     };
-    
+
     let js_code = rust_block_to_js(&block);
     assert!(js_code.contains("const arr = [1, 2, 3]"));
     assert!(js_code.contains("const first = arr[0]"));
@@ -289,7 +289,7 @@ fn test_struct_operations_in_statements() {
             x_coord
         }
     };
-    
+
     let js_code = rust_block_to_js(&block);
     assert!(js_code.contains("const point = { x: 10, y: 20 }"));
     assert!(js_code.contains("const x_coord = point.x"));
@@ -305,7 +305,7 @@ fn test_option_handling_in_statements() {
             is_present
         }
     };
-    
+
     let js_code = rust_block_to_js(&block);
     assert!(js_code.contains("const maybe_value = 42"));
     assert!(js_code.contains("!== null") || js_code.contains("!== undefined"));
@@ -320,7 +320,7 @@ fn test_macro_calls_in_statements() {
             greeting
         }
     };
-    
+
     let js_code = rust_block_to_js(&block);
     assert!(js_code.contains("Hello"));
     assert!(js_code.contains("console.log"));
@@ -330,7 +330,7 @@ fn test_macro_calls_in_statements() {
 #[test]
 fn test_empty_block() {
     let block: Block = parse_quote! { {} };
-    
+
     let js_code = rust_block_to_js(&block);
     // Should produce valid but empty JS
     let result = eval_block_as_function(&js_code);
@@ -340,7 +340,7 @@ fn test_empty_block() {
 #[test]
 fn test_single_expression_block() {
     let block: Block = parse_quote! { { 42 } };
-    
+
     let js_code = rust_block_to_js(&block);
     let result = eval_block_as_function(&js_code).unwrap();
     assert_eq!(result.as_number().unwrap(), 42.0);
@@ -357,9 +357,9 @@ fn test_mixed_statement_types() {
             y                    // Final expression (return)
         }
     };
-    
+
     let js_code = rust_block_to_js(&block);
-    
+
     // Check all parts are present
     assert!(js_code.contains("const x = 5"));
     assert!(js_code.contains("x + 1;"));
