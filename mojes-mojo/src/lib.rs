@@ -72,6 +72,7 @@ fn handle_assignment_op(expr: &syn::ExprAssign) -> String {
 */
 
 // Add a proper macro handler function - particularly for format!
+
 fn handle_macro_expr(mac: &syn::Macro) -> String {
     // Get the macro name
     let macro_name = if let Some(segment) = mac.path.segments.last() {
@@ -126,14 +127,106 @@ fn handle_macro_expr(mac: &syn::Macro) -> String {
             result.push('`');
             result
         }
-        /*
-                "println" | "print" => {
-                    // Convert to console.log
-                    format!("console.log({})", tokens.to_string())
-                },
-        */
+
+        "println" => {
+            // Convert println! to console.log
+            let tokens = &mac.tokens;
+            let token_string = tokens.to_string();
+
+            if token_string.trim().is_empty() {
+                // println!() with no arguments
+                "console.log()".to_string()
+            } else {
+                // Handle println! with format string and arguments
+                if token_string.contains("{}") {
+                    // This is a format-style println!
+                    let format_result = handle_format_like_macro(&token_string);
+                    format!("console.log({})", format_result)
+                } else {
+                    // Simple println! with just a string or expression
+                    format!("console.log({})", token_string)
+                }
+            }
+        }
+
+        "print" => {
+            // Similar to println but without newline (JS console.log always adds newline though)
+            let tokens = &mac.tokens;
+            let token_string = tokens.to_string();
+
+            if token_string.trim().is_empty() {
+                "console.log()".to_string()
+            } else {
+                if token_string.contains("{}") {
+                    let format_result = handle_format_like_macro(&token_string);
+                    format!("console.log({})", format_result)
+                } else {
+                    format!("console.log({})", token_string)
+                }
+            }
+        }
+
+        "eprintln" | "eprint" => {
+            // Convert to console.error for stderr output
+            let tokens = &mac.tokens;
+            let token_string = tokens.to_string();
+
+            if token_string.trim().is_empty() {
+                "console.error()".to_string()
+            } else {
+                if token_string.contains("{}") {
+                    let format_result = handle_format_like_macro(&token_string);
+                    format!("console.error({})", format_result)
+                } else {
+                    format!("console.error({})", token_string)
+                }
+            }
+        }
+
         _ => format!("/* Unsupported macro {} */", macro_name),
     }
+}
+
+// Helper function to handle format-like macros (reusable for println!, etc.)
+fn handle_format_like_macro(token_string: &str) -> String {
+    let parts: Vec<&str> = token_string.split(',').collect();
+
+    if parts.is_empty() {
+        return "\"\"".to_string();
+    }
+
+    // Get the format string (remove quotes)
+    let mut format_str = parts[0].trim();
+    if format_str.starts_with('"') && format_str.ends_with('"') {
+        format_str = &format_str[1..format_str.len() - 1];
+    }
+
+    // Get format arguments
+    let format_args: Vec<String> = parts
+        .iter()
+        .skip(1)
+        .map(|arg| arg.trim().to_string())
+        .collect();
+
+    // Split the format string at each placeholder
+    let str_parts: Vec<&str> = format_str.split("{}").collect();
+
+    // Combine the parts with the arguments using a template literal
+    let mut result = String::from("`");
+
+    for (i, part) in str_parts.iter().enumerate() {
+        // Escape backticks in the string parts
+        let escaped_part = part.replace("`", "\\`");
+        result.push_str(&escaped_part);
+
+        // Add the argument if there is one for this placeholder
+        if i < format_args.len() {
+            result.push_str(&format!("${{{}}}", format_args[i]));
+        }
+    }
+
+    result.push('`');
+    result
 }
 
 fn update_rust_expr_to_js_for_macros(expr: &Expr) -> Option<String> {

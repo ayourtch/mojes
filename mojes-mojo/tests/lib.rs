@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
+    use boa_engine::{Context, JsResult, JsValue, Source};
     use mojes_mojo::*;
-    use boa_engine::{Context, Source, JsResult, JsValue};
-    use syn::{parse_quote, Expr, ItemEnum, ItemStruct, Type};
+    use syn::{Expr, ItemEnum, ItemStruct, Type, parse_quote};
 
     // Helper function to create a JS context and evaluate code
     fn eval_js(code: &str) -> JsResult<JsValue> {
@@ -17,10 +17,10 @@ mod tests {
 
     // Helper to check if a JsValue represents an array
     fn is_js_array(value: &JsValue) -> bool {
-        value.is_object() && 
-        value.as_object().map_or(false, |obj| {
-            obj.get("length", &mut Context::default()).is_ok()
-        })
+        value.is_object()
+            && value.as_object().map_or(false, |obj| {
+                obj.get("length", &mut Context::default()).is_ok()
+            })
     }
 
     #[test]
@@ -79,7 +79,7 @@ mod tests {
         // Test that generated JS actually runs
         let expr: Expr = parse_quote!(2 + 3);
         let js_code = rust_expr_to_js(&expr);
-        
+
         let result = eval_js(&js_code).unwrap();
         assert_eq!(result.as_number().unwrap(), 5.0);
     }
@@ -88,11 +88,11 @@ mod tests {
     fn test_array_handling_with_boa() {
         let expr: Expr = parse_quote!([1, 2, 3]);
         let js_code = rust_expr_to_js(&expr);
-        
+
         // Wrap in a function to return the array
         let test_code = format!("(function() {{ return {}; }})()", js_code);
         let result = eval_js(&test_code).unwrap();
-        
+
         assert!(is_js_array(&result));
     }
 
@@ -106,7 +106,7 @@ mod tests {
         };
 
         let js_class = generate_js_class_for_struct(&struct_def);
-        
+
         // Test that generated class is valid JS
         assert!(is_valid_js(&js_class));
         assert!(js_class.contains("class Person"));
@@ -122,14 +122,17 @@ mod tests {
         };
 
         let js_class = generate_js_class_for_struct(&struct_def);
-        
-        let test_code = format!(r#"
+
+        let test_code = format!(
+            r#"
             {}
             const p = new Point(10, 20);
             const json = p.toJSON();
             const p2 = Point.fromJSON(json);
             [p.x, p.y, p2.x, p2.y]
-        "#, js_class);
+        "#,
+            js_class
+        );
 
         let result = eval_js(&test_code).unwrap();
         // Should return [10, 20, 10, 20]
@@ -147,7 +150,7 @@ mod tests {
         };
 
         let js_enum = generate_js_enum(&enum_def);
-        
+
         // Test that generated enum is valid JS
         assert!(is_valid_js(&js_enum));
         assert!(js_enum.contains("const Status"));
@@ -161,11 +164,14 @@ mod tests {
         };
 
         let js_enum = generate_js_enum(&enum_def);
-        
-        let test_code = format!(r#"
+
+        let test_code = format!(
+            r#"
             {}
             [Color.Red, isColor(Color.Red), isColor("invalid")]
-        "#, js_enum);
+        "#,
+            js_enum
+        );
 
         let result = eval_js(&test_code);
         // Should work without throwing
@@ -175,7 +181,7 @@ mod tests {
     #[test]
     fn test_rust_block_to_js_basic() {
         use syn::Block;
-        
+
         let block: Block = parse_quote! {
             {
                 let x = 5;
@@ -185,7 +191,7 @@ mod tests {
         };
 
         let js_code = rust_block_to_js(&block);
-        
+
         // Should be valid JS
         let test_code = format!("(function() {{\n{}}})();", js_code);
         let result = eval_js(&test_code).unwrap();
@@ -211,14 +217,17 @@ mod tests {
         };
 
         let js_code = rust_expr_to_js(&expr);
-        
+
         // Create a test function with the expression
-        let test_code = format!(r#"
+        let test_code = format!(
+            r#"
             function test(x) {{
                 return {};
             }}
             [test(5), test(-3), test(0)]
-        "#, js_code);
+        "#,
+            js_code
+        );
 
         let result = eval_js(&test_code).unwrap();
         assert!(is_js_array(&result));
