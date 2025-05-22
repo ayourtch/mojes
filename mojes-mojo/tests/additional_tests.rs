@@ -15,6 +15,24 @@ fn eval_block_as_function(block_js: &str) -> JsResult<JsValue> {
     eval_js(&code)
 }
 
+#[test]
+fn test_current_string_escaping_behavior() {
+    let expr: Expr = parse_quote!("Line 1\nLine 2\tTabbed\rCarriage\"Quote");
+    let js_code = rust_expr_to_js(&expr);
+    println!(
+        "DEBUG test_current_string_escaping_behavior js code: {}",
+        &js_code
+    );
+
+    // Currently escapes:
+    assert!(js_code.contains("\\n")); // newlines
+    assert!(js_code.contains("\\\"")); // quotes
+    assert!(js_code.contains("\\t")); // tabs (literal)
+    assert!(js_code.contains("\\r")); // carriage returns (literal)
+
+    println!("Current escaping behavior: {}", js_code);
+}
+
 // ==================== UNARY OPERATIONS TESTS ====================
 #[test]
 fn test_unary_operations() {
@@ -55,6 +73,44 @@ fn test_reference_expressions() {
     let js_code = rust_expr_to_js(&expr);
     assert_eq!(js_code, "(x + y) /* was & in Rust */");
 }
+// Additional test to verify the path vs non-path reference behavior
+#[test]
+fn test_reference_expression_types() {
+    // Path expressions (variables) - no comment
+    let expr: Expr = parse_quote!(&variable_name);
+    let js_code = rust_expr_to_js(&expr);
+    assert_eq!(js_code, "variable_name");
+
+    // Literal expressions - no comment for string literals
+    let expr: Expr = parse_quote!(&42);
+    let js_code = rust_expr_to_js(&expr);
+    assert_eq!(js_code, "42 /* was & in Rust */");
+
+    // Complex expressions - should have comment
+    let expr: Expr = parse_quote!(&func_call());
+    let js_code = rust_expr_to_js(&expr);
+    assert_eq!(js_code, "func_call() /* was & in Rust */");
+
+    // Field access - should have comment
+    let expr: Expr = parse_quote!(&obj.field);
+    let js_code = rust_expr_to_js(&expr);
+    assert_eq!(js_code, "obj.field /* was & in Rust */");
+}
+
+// Test mutable vs immutable references more thoroughly
+#[test]
+fn test_mutable_reference_behavior() {
+    // Mutable reference to variable
+    let expr: Expr = parse_quote!(&mut x);
+    let js_code = rust_expr_to_js(&expr);
+    assert_eq!(js_code, "x /* was &mut in Rust */");
+
+    // Mutable reference to complex expression
+    let expr: Expr = parse_quote!(&mut (a + b));
+    let js_code = rust_expr_to_js(&expr);
+    assert_eq!(js_code, "(a + b) /* was &mut in Rust */");
+}
+
 // ==================== BITWISE OPERATIONS TESTS ====================
 #[test]
 fn test_bitwise_operations() {
