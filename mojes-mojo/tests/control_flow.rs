@@ -158,6 +158,7 @@ fn test_match_option_expressions() {
     };
 
     let js_code = rust_expr_to_js(&expr);
+    eprintln!("DEBUG test_match_option_expressions js code: {}", &js_code);
 
     // Test with Some value (represented as the value itself in JS)
     let result = eval_expr_with_vars(&js_code, &[("opt", "42")]).unwrap();
@@ -245,6 +246,7 @@ fn test_complex_control_flow() {
     };
 
     let js_code = rust_block_to_js(&block);
+    eprintln!("DEBUG test_complex_control_flow js code: {}", &js_code);
     let result = eval_block_as_function(&js_code).unwrap();
     // Should sum even numbers: 2 + 4 = 6
     assert_eq!(result.as_number().unwrap(), 6.0);
@@ -285,6 +287,7 @@ fn test_if_in_loops() {
     };
 
     let js_code = rust_block_to_js(&block);
+    eprintln!("DEBUG test_if_in_loops js code: {}", &js_code);
     let result = eval_block_as_function(&js_code).unwrap();
     assert_eq!(result.as_boolean().unwrap(), true);
 }
