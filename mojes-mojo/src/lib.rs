@@ -83,55 +83,18 @@ fn handle_macro_expr(mac: &syn::Macro) -> String {
 
     match macro_name.as_str() {
         "format" => {
-            // Handle format! macro
+            // Handle format! macro - just delegate to handle_format_like_macro
             let tokens = &mac.tokens;
             let token_string = tokens.to_string();
 
-            // Split by commas to separate format string from arguments
-            let parts: Vec<&str> = token_string.split(',').collect();
-
-            if parts.is_empty() {
-                return "\"\"".to_string();
-            }
-
-            // Get the format string (remove quotes)
-            let mut format_str = parts[0].trim();
-            if format_str.starts_with('"') && format_str.ends_with('"') {
-                format_str = &format_str[1..format_str.len() - 1];
-            }
-
-            // Get format arguments
-            let format_args: Vec<String> = parts
-                .iter()
-                .skip(1)
-                .map(|arg| arg.trim().to_string())
-                .collect();
-
-            // Split the format string at each placeholder
-            let parts: Vec<&str> = format_str.split("{}").collect();
-
-            // Combine the parts with the arguments using a template literal
-            let mut result = String::from("`");
-
-            for (i, part) in parts.iter().enumerate() {
-                // Escape backticks in the string parts
-                let escaped_part = part.replace("`", "\\`");
-                result.push_str(&escaped_part);
-
-                // Add the argument if there is one for this placeholder
-                if i < format_args.len() {
-                    result.push_str(&format!("${{{}}}", format_args[i]));
-                }
-            }
-
-            result.push('`');
-            result
+            // Use the same logic as println! and other format-like macros
+            handle_format_like_macro(&token_string)
         }
-
         "println" => {
             // Convert println! to console.log
             let tokens = &mac.tokens;
             let token_string = tokens.to_string();
+            eprintln!("DEBUG println! tokens: '{}'", token_string);
 
             if token_string.trim().is_empty() {
                 // println!() with no arguments
@@ -140,6 +103,7 @@ fn handle_macro_expr(mac: &syn::Macro) -> String {
                 // Handle println! with format string and arguments
                 if token_string.contains("{}") {
                     // This is a format-style println!
+                    eprintln!("DEBUG: Detected format style println!");
                     let format_result = handle_format_like_macro(&token_string);
                     format!("console.log({})", format_result)
                 } else {
@@ -188,8 +152,13 @@ fn handle_macro_expr(mac: &syn::Macro) -> String {
 }
 
 // Helper function to handle format-like macros (reusable for println!, etc.)
+
 fn handle_format_like_macro(token_string: &str) -> String {
-    let parts: Vec<&str> = token_string.split(',').collect();
+    eprintln!("DEBUG handle_format_like_macro input: '{}'", token_string);
+
+    // Smart comma splitting that respects quote boundaries
+    let parts = smart_comma_split(token_string);
+    eprintln!("DEBUG parts after smart split: {:?}", parts);
 
     if parts.is_empty() {
         return "\"\"".to_string();
@@ -200,6 +169,7 @@ fn handle_format_like_macro(token_string: &str) -> String {
     if format_str.starts_with('"') && format_str.ends_with('"') {
         format_str = &format_str[1..format_str.len() - 1];
     }
+    eprintln!("DEBUG format_str: '{}'", format_str);
 
     // Get format arguments
     let format_args: Vec<String> = parts
@@ -207,16 +177,30 @@ fn handle_format_like_macro(token_string: &str) -> String {
         .skip(1)
         .map(|arg| arg.trim().to_string())
         .collect();
+    eprintln!("DEBUG format_args: {:?}", format_args);
+
+    // Check if there are actually placeholders
+    if !format_str.contains("{}") {
+        // No placeholders, but still return template literal for consistency
+        // and to handle backtick escaping properly
+        let escaped_format_str = format_str.replace("`", "\\`");
+        return format!("`{}`", escaped_format_str);
+    }
 
     // Split the format string at each placeholder
     let str_parts: Vec<&str> = format_str.split("{}").collect();
+    eprintln!("DEBUG str_parts: {:?}", str_parts);
 
     // Combine the parts with the arguments using a template literal
     let mut result = String::from("`");
 
     for (i, part) in str_parts.iter().enumerate() {
+        eprintln!("DEBUG processing part {}: '{}'", i, part);
+
         // Escape backticks in the string parts
         let escaped_part = part.replace("`", "\\`");
+        eprintln!("DEBUG escaped_part: '{}'", escaped_part);
+
         result.push_str(&escaped_part);
 
         // Add the argument if there is one for this placeholder
@@ -226,7 +210,41 @@ fn handle_format_like_macro(token_string: &str) -> String {
     }
 
     result.push('`');
+    eprintln!("DEBUG final result: '{}'", result);
     result
+}
+
+// Add this helper function to properly split on commas while respecting quotes
+fn smart_comma_split(input: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current_part = String::new();
+    let mut in_quotes = false;
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => {
+                // Toggle quote state
+                in_quotes = !in_quotes;
+                current_part.push(ch);
+            }
+            ',' if !in_quotes => {
+                // Found a comma outside quotes, split here
+                parts.push(current_part.trim().to_string());
+                current_part.clear();
+            }
+            _ => {
+                current_part.push(ch);
+            }
+        }
+    }
+
+    // Add the last part
+    if !current_part.is_empty() {
+        parts.push(current_part.trim().to_string());
+    }
+
+    parts
 }
 
 fn update_rust_expr_to_js_for_macros(expr: &Expr) -> Option<String> {
@@ -554,7 +572,11 @@ pub fn rust_block_to_js(block: &Block) -> String {
                     }
                 }
             }
-            Stmt::Macro(mac_stmt) => handle_macro_expr(&mac_stmt.mac),
+            Stmt::Macro(mac_stmt) => {
+                let macro_result = handle_macro_expr(&mac_stmt.mac);
+                // Add proper indentation and semicolon for macro statements
+                format!("  {};\n", macro_result)
+            }
             // Remove unsupported Stmt variants
             x => panic!("Unsupported statement {:?}", &x), //"  /* Unsupported statement */\n".to_string(),
         };
