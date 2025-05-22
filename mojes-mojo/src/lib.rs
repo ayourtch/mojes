@@ -410,6 +410,9 @@ fn handle_while_expr(expr: &syn::ExprWhile) -> String {
         .collect::<Vec<String>>()
         .join("\n");
 
+    // wrap the body into a function
+    let trimmed_body = format!("(function() {{\n{}}})();", trimmed_body);
+
     format!("while ({}) {{\n{}}}", cond_js, trimmed_body)
 }
 
@@ -440,6 +443,8 @@ fn handle_for_expr(expr: &syn::ExprForLoop) -> String {
         })
         .collect::<Vec<String>>()
         .join("\n");
+    // wrap the body into a function
+    let trimmed_body = format!("(function() {{\n{}}})();", trimmed_body);
 
     format!(
         "for (const {} of {}) {{\n{}}}",
@@ -454,11 +459,16 @@ pub fn rust_block_to_js(block: &Block) -> String {
     for stmt in &block.stmts {
         let stmt_js = match stmt {
             Stmt::Expr(expr, semi) => {
-                // Special handling for loops and flow control
                 match expr {
-                    Expr::While(_) | Expr::ForLoop(_) => {
-                        let expr_js = rust_expr_to_js(expr);
-                        format!("  {};\n", expr_js)
+                    Expr::While(while_expr) => {
+                        // Handle while loops - don't add semicolon or extra formatting
+                        let expr_js = handle_while_expr(while_expr);
+                        format!("  {};\n", expr_js) // Add proper indentation
+                    }
+                    Expr::ForLoop(for_expr) => {
+                        // Handle for loops - don't add semicolon or extra formatting
+                        let expr_js = handle_for_expr(for_expr);
+                        format!("  {};\n", expr_js) // Add proper indentation
                     }
                     _ => {
                         // Regular expression handling
