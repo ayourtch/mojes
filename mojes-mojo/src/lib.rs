@@ -147,7 +147,7 @@ fn handle_macro_expr(mac: &syn::Macro) -> String {
             }
         }
 
-        _ => format!("/* Unsupported macro {} */", macro_name),
+        x => panic!("/* Unsupported macro {} */", macro_name),
     }
 }
 
@@ -553,7 +553,7 @@ pub fn rust_block_to_js(block: &Block) -> String {
                             let init_js = rust_expr_to_js(init_expr);
                             format!("  const {{ {} }} = {};\n", fields.join(", "), init_js)
                         }
-                        _ => "  /* Unsupported destructuring pattern */\n".to_string(),
+                        x => panic!("  /* Unsupported destructuring pattern: {:?}  */\n", x),
                     }
                 } else {
                     // Variable declaration without initialization
@@ -568,7 +568,7 @@ pub fn rust_block_to_js(block: &Block) -> String {
                                 format!("  let {};\n", var_name)
                             }
                         }
-                        _ => "  /* Unsupported variable pattern */\n".to_string(),
+                        x => panic!("  /* Unsupported variable pattern: {:?}  */\n", x),
                     }
                 }
             }
@@ -663,7 +663,7 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
                             _ => name,
                         }
                     } else {
-                        "/* Unsupported function path */".to_string()
+                        panic!("/* Unsupported function path */");
                     }
                 }
                 _ => rust_expr_to_js(&call.func),
@@ -763,7 +763,7 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
             syn::Lit::Float(f) => f.to_string(),
             syn::Lit::Bool(b) => b.value.to_string(),
             syn::Lit::Char(c) => format!("\"{}\"", c.value()),
-            _ => "/* Unsupported literal */".to_string(),
+            x => panic!("/* Unsupported literal: {:?} */", x),
         },
         Expr::Unary(unary) => {
             let operand = rust_expr_to_js(&unary.expr);
@@ -806,7 +806,7 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
                 syn::BinOp::Ne(_) => format!("{} !== {}", left, right),
                 syn::BinOp::Ge(_) => format!("{} >= {}", left, right),
                 syn::BinOp::Gt(_) => format!("{} > {}", left, right),
-                _ => format!("/* Unsupported binary op */ ({}, {})", left, right),
+                x => panic!("/* Unsupported binary op {:?} */ ({}, {})", x, left, right),
             }
         }
 
@@ -826,7 +826,7 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
                     _ => last_segment.ident.to_string(),
                 }
             } else {
-                "/* Unsupported path */".to_string()
+                panic!("/* Unsupported path */");
             }
         }
 
@@ -1031,7 +1031,7 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
         }
 
         // For any other unhandled expression
-        x => format!("/* Unsupported expression: {:?} */", x).to_string(),
+        x => panic!("/* Unsupported expression: {:?} */", x).to_string(),
     }
 }
 
