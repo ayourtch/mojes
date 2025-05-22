@@ -567,6 +567,12 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
         // Handle for loops
         Expr::ForLoop(for_expr) => handle_for_expr(for_expr),
 
+        Expr::Block(block_expr) => {
+            // Handle nested blocks
+            let block_js = rust_block_to_js(&block_expr.block);
+            format!("(function() {{\n{}}})();", block_js)
+        }
+
         // Handle if-let expressions
         Expr::If(if_expr) => {
             // First check if this is an "if let Some(x) = ..." pattern
