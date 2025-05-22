@@ -1,4 +1,7 @@
 #[cfg(test)]
+mod expressions;
+
+#[cfg(test)]
 mod tests {
     use boa_engine::{Context, JsResult, JsValue, Source};
     use mojes_mojo::*;

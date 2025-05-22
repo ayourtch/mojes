@@ -672,6 +672,16 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
                 "find" => "find",
                 "contains" => "includes",
                 "to_string" => "toString",
+                "to_uppercase" => "toUpperCase",
+                "to_lowercase" => "toLowerCase",
+                "trim" => "trim",
+                "trim_start" => "trimStart",
+                "trim_end" => "trimEnd",
+                "starts_with" => "startsWith",
+                "ends_with" => "endsWith",
+                "replace" => "replace",
+                "split" => "split",
+                "join" => "join",
                 "is_some" => "", // Handle Option methods specially
                 "is_none" => "",
                 "unwrap" => "",
@@ -710,6 +720,15 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
             syn::Lit::Char(c) => format!("\"{}\"", c.value()),
             _ => "/* Unsupported literal */".to_string(),
         },
+        Expr::Unary(unary) => {
+            let operand = rust_expr_to_js(&unary.expr);
+            match &unary.op {
+                syn::UnOp::Not(_) => format!("!{}", operand),
+                syn::UnOp::Neg(_) => format!("-{}", operand),
+                syn::UnOp::Deref(_) => operand, // In JS, we don't have explicit dereferencing
+                &_ => todo!(),
+            }
+        }
 
         // Handle binary operations
         Expr::Binary(bin) => {
