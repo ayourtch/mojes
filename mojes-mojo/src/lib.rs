@@ -810,7 +810,14 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
         // Handle match expressions with Option better
         Expr::Match(match_expr) => {
             // First check if this is a match on an Option
+            eprintln!("DEBUG: Checking match arms:");
+            for (i, arm) in match_expr.arms.iter().enumerate() {
+                eprintln!("  Arm {}: {:?}", i, arm.pat);
+                eprintln!("    is_some: {}", is_some_pattern(&arm.pat));
+                eprintln!("    is_none: {}", is_none_pattern(&arm.pat));
+            }
             let is_option_match = is_option_match_expr(match_expr);
+            eprintln!("DEBUG: is_option_match result: {}", is_option_match);
 
             if is_option_match {
                 // Handle Option match more intelligently
@@ -876,7 +883,8 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
                                 syn::Lit::Float(f) => lit_js = f.to_string(),
                                 syn::Lit::Bool(b) => lit_js = b.value.to_string(),
                                 syn::Lit::Char(c) => lit_js = format!("\"{}\"", c.value()),
-                                _ => lit_js = "/* Unsupported literal */".to_string(),
+                                // _ => lit_js = "/* Unsupported literal */".to_string(),
+                                x => panic!("Unsupported literal {:?}", x),
                             }
 
                             if i == 0 {
@@ -908,8 +916,9 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
                                 )
                             }
                         }
-                        _ => {
+                        x => {
                             // Other patterns not supported fully
+                            panic!("Unsupported other pattern (i = {}): {:?}", i, x);
                             if i == 0 {
                                 "  if (true) { // Unsupported pattern\n".to_string()
                             } else {
@@ -1000,21 +1009,33 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
 
 // Functions to check if an expression is a Some/None pattern
 fn is_some_pattern(pat: &Pat) -> bool {
-    if let Pat::TupleStruct(tuple_struct) = pat {
-        if let Some(last_segment) = tuple_struct.path.segments.last() {
-            return last_segment.ident == "Some";
+    match pat {
+        Pat::TupleStruct(tuple_struct) => {
+            if let Some(last_segment) = tuple_struct.path.segments.last() {
+                last_segment.ident == "Some"
+            } else {
+                false
+            }
         }
+        _ => false,
     }
-    false
 }
 
 fn is_none_pattern(pat: &Pat) -> bool {
-    if let Pat::Path(path) = pat {
-        if let Some(segment) = path.path.segments.last() {
-            return segment.ident == "None";
+    match pat {
+        Pat::Path(path_pat) => {
+            if let Some(segment) = path_pat.path.segments.last() {
+                segment.ident == "None"
+            } else {
+                false
+            }
         }
+        Pat::Ident(pat_ident) => {
+            // Handle None as an identifier pattern too
+            pat_ident.ident == "None"
+        }
+        _ => false,
     }
-    false
 }
 
 // Updated function to extract a variable name from Some(var) pattern
