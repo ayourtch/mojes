@@ -751,7 +751,13 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
         Expr::Lit(lit) => match &lit.lit {
             syn::Lit::Str(s) => format!(
                 "\"{}\"",
-                s.value().replace("\"", "\\\"").replace("\n", "\\n")
+                // s.value().replace("\"", "\\\"").replace("\n", "\\n")
+                s.value()
+                    .replace("\\", "\\\\") // Escape backslashes first!
+                    .replace("\"", "\\\"") // Escape quotes
+                    .replace("\n", "\\n") // Escape newlines
+                    .replace("\t", "\\t") // Escape tabs
+                    .replace("\r", "\\r") // Escape carriage returns
             ),
             syn::Lit::Int(i) => i.to_string(),
             syn::Lit::Float(f) => f.to_string(),
