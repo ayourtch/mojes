@@ -649,8 +649,13 @@ fn rust_block_statements_to_js(block: &syn::Block) -> String {
                 let js_expr = rust_expr_to_js(expr);
                 format!("  {};", js_expr)
             }
-            Stmt::Item(_) => "  /* item statement */".to_string(),
-            _ => "  /* unknown statement */".to_string(),
+            Stmt::Macro(mac_stmt) => {
+                let macro_result = handle_macro_expr(&mac_stmt.mac);
+                // Add proper indentation and semicolon for macro statements
+                format!("  {};\n", macro_result)
+            }
+            Stmt::Item(x) => panic!("  /* item statement: {:?} */", &x),
+            x => panic!("  /* unknown statement: {:?} */", x),
         };
 
         if !stmt_js.trim().is_empty() {
