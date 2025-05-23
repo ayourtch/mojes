@@ -355,9 +355,22 @@ impl Window {
         println!("CLEAR_INTERVAL: timer {} cleared", timer_id);
     }
 
-    pub fn requestAnimationFrame(&self, _callback: fn()) -> u32 {
+    /*
+    does not accept closures!
+
+        pub fn requestAnimationFrame(&self, _callback: fn()) -> u32 {
+            println!("REQUEST_ANIMATION_FRAME: callback scheduled");
+            1 // Mock frame ID
+        }
+    */
+
+    pub fn requestAnimationFrame<F>(&self, callback: F) -> u32
+    where
+        F: FnOnce() + 'static,
+    {
+        // Mock implementation - in real browser this would be handled differently
         println!("REQUEST_ANIMATION_FRAME: callback scheduled");
-        1 // Mock frame ID
+        1
     }
 
     pub fn cancelAnimationFrame(&self, frame_id: u32) {
@@ -780,7 +793,15 @@ pub fn clearInterval(timer_id: u32) {
     window.clearInterval(timer_id)
 }
 
+/*
 pub fn requestAnimationFrame(callback: fn()) -> u32 {
+    window.requestAnimationFrame(callback)
+}
+*/
+pub fn requestAnimationFrame<F>(callback: F) -> u32
+where
+    F: FnOnce() + 'static,
+{
     window.requestAnimationFrame(callback)
 }
 
