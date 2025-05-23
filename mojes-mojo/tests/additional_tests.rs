@@ -259,9 +259,137 @@ fn test_string_concatenation_detection() {
 fn test_method_chaining() {
     let expr: Expr = parse_quote!(text.trim().to_uppercase().len());
     let js_code = rust_expr_to_js(&expr);
-    assert!(js_code.contains("trim().toUpperCase().length()"));
+
+    // Should be: text.trim().toUpperCase().length (property, not method)
+    assert!(js_code.contains("trim().toUpperCase().length"));
+
+    // NOT: trim().toUpperCase().length() - that would be invalid JavaScript
+    assert!(!js_code.contains("length()"));
+
+    println!("Method chaining result: {}", js_code);
+    assert_eq!(js_code, "text.trim().toUpperCase().length");
 }
 
+#[test]
+fn test_method_chaining_execution() {
+    // Test that the generated method chain actually works in JavaScript
+    let expr: Expr = parse_quote!(text.trim().to_uppercase().len());
+    let js_code = rust_expr_to_js(&expr);
+
+    let test_code = format!(
+        r#"
+        const text = "  hello world  ";
+        const result = {};
+        result;
+    "#,
+        js_code
+    );
+
+    let result = eval_js(&test_code).unwrap();
+    // "  hello world  ".trim().toUpperCase().length
+    // = "hello world".toUpperCase().length
+    // = "HELLO WORLD".length
+    // = 11
+    assert_eq!(result.as_number().unwrap(), 11.0);
+
+    println!(
+        "Method chaining execution successful: {} -> {}",
+        js_code,
+        result.as_number().unwrap()
+    );
+}
+
+#[test]
+fn test_string_methods_mapping() {
+    // Test individual string method mappings
+    let test_cases = vec![
+        (parse_quote!(s.trim()), "s.trim()"),
+        (parse_quote!(s.to_uppercase()), "s.toUpperCase()"),
+        (parse_quote!(s.to_lowercase()), "s.toLowerCase()"),
+        (
+            parse_quote!(s.starts_with("prefix")),
+            "s.startsWith(\"prefix\")",
+        ),
+        (
+            parse_quote!(s.ends_with("suffix")),
+            "s.endsWith(\"suffix\")",
+        ),
+        (parse_quote!(s.len()), "s.length"), // Property, not method!
+    ];
+
+    for (expr, expected) in test_cases {
+        let js_code = rust_expr_to_js(&expr);
+        assert_eq!(js_code, expected);
+        println!(
+            "✓ {} -> {}",
+            format!("{:?}", expr).split("::").last().unwrap_or("expr"),
+            js_code
+        );
+    }
+}
+
+#[test]
+fn test_array_vs_string_length() {
+    // Both arrays and strings should use .length property in JavaScript
+
+    // Array length
+    let expr: Expr = parse_quote!(arr.len());
+    let js_code = rust_expr_to_js(&expr);
+    assert_eq!(js_code, "arr.length");
+
+    // String length
+    let expr: Expr = parse_quote!(text.len());
+    let js_code = rust_expr_to_js(&expr);
+    assert_eq!(js_code, "text.length");
+
+    // Test execution
+    let test_code = r#"
+        const arr = [1, 2, 3, 4, 5];
+        const text = "hello";
+        const arrLen = arr.length;
+        const textLen = text.length;
+        [arrLen, textLen];
+    "#;
+
+    let result = eval_js(test_code).unwrap();
+    println!("Array and string length work correctly in JS");
+}
+
+#[test]
+fn test_complex_method_chaining() {
+    // Test more complex method chains
+    let expr: Expr = parse_quote!(data.iter().map(process).filter(valid).collect().len());
+    let js_code = rust_expr_to_js(&expr);
+
+    // Should remove .iter() and .collect(), keep .map() and .filter(), convert .len() to .length
+    assert!(js_code.contains("map(process)"));
+    assert!(js_code.contains("filter(valid)"));
+    assert!(js_code.ends_with(".length")); // Property access
+    assert!(!js_code.contains("iter()"));
+    assert!(!js_code.contains("collect()"));
+    assert!(!js_code.contains("length()"));
+
+    println!("Complex method chain: {}", js_code);
+
+    // Should be something like: data.map(process).filter(valid).length
+    assert_eq!(js_code, "data.map(process).filter(valid).length");
+}
+
+#[test]
+fn test_mixed_method_types() {
+    // Test mixing methods that stay methods with .len() that becomes property
+    let expr: Expr = parse_quote!(vec.push(item).len());
+    let js_code = rust_expr_to_js(&expr);
+
+    // Should be: vec.push(item).length
+    // Note: This might not be semantically correct (push returns void in JS),
+    // but we're testing the transpilation pattern
+    assert!(js_code.contains("push(item)"));
+    assert!(js_code.ends_with(".length"));
+    assert!(!js_code.contains("length()"));
+
+    println!("Mixed method types: {}", js_code);
+}
 #[test]
 fn test_string_methods() {
     let expr: Expr = parse_quote!(s.starts_with("prefix"));
@@ -356,8 +484,8 @@ fn test_mixed_expressions_in_blocks() {
     let block: Block = parse_quote! {
         {
             let data = [1, 2, 3];
-            let processed = data.map(|x| x * 2); // This won't work yet but let's see
-            let result = if processed.len() > 0 {
+            let processed = data.map(|x| x * 2); // Closure now works!
+            let result = if processed.len() > 0 {  // Use .len() instead of .length()
                 processed[0]
             } else {
                 0
@@ -367,17 +495,57 @@ fn test_mixed_expressions_in_blocks() {
     };
 
     let js_code = rust_block_to_js(&block);
-    // Should at least generate valid structure
+
+    // Should contain all expected parts
     assert!(js_code.contains("const data = [1, 2, 3]"));
+    assert!(js_code.contains("x => x * 2")); // Closure should be converted
+    assert!(js_code.contains("data.map"));
+    assert!(js_code.contains("processed.length")); // .len() -> .length (property)
+
+    println!("Mixed expressions JS output:\n{}", js_code);
+
+    // Test execution with proper JavaScript array methods
+    let test_code = format!(
+        r#"
+        (function() {{
+            {}
+        }})();
+    "#,
+        js_code
+    );
+
+    let result = eval_js(&test_code).unwrap();
+    assert_eq!(result.as_number().unwrap(), 2.0); // [1,2,3] -> [2,4,6] -> first element is 2
 }
 
 // ==================== ERROR HANDLING TESTS ====================
 #[test]
 fn test_unsupported_expressions() {
-    // Test that unsupported expressions generate comments
+    // Test that async expressions are now properly supported
     let expr: Expr = parse_quote!(async { some_future.await });
     let js_code = rust_expr_to_js(&expr);
-    assert!(js_code.contains("Unsupported expression"));
+
+    // Should now generate proper async JavaScript, not an error
+    assert!(js_code.contains("async function"));
+    assert!(js_code.contains("await some_future"));
+
+    println!("Async expressions are now supported: {}", js_code);
+
+    // Test a truly unsupported expression (if any exist)
+    // For now, let's test that the transpiler doesn't panic on complex expressions
+    let expr: Expr = parse_quote! {
+        if let Some(value) = complex_option {
+            value * 2
+        } else {
+            0
+        }
+    };
+
+    let js_code = rust_expr_to_js(&expr);
+    // Should handle if-let expressions (you already had this implemented)
+    assert!(js_code.contains("!== null") || js_code.contains("!== undefined"));
+
+    println!("Complex if-let handling: {}", js_code);
 }
 
 // ==================== SPECIAL CHARACTER HANDLING ====================

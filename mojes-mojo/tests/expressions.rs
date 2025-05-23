@@ -151,10 +151,10 @@ fn test_function_call_expressions() {
 }
 
 #[test]
-fn test_method_call_expressions() {
+fn test_method_call_expressions_0() {
     // Basic method calls
     let expr: Expr = parse_quote!(arr.len());
-    assert_eq!(rust_expr_to_js(&expr), "arr.length()");
+    assert_eq!(rust_expr_to_js(&expr), "arr.length");
 
     let expr: Expr = parse_quote!(vec.push(item));
     assert_eq!(rust_expr_to_js(&expr), "vec.push(item)");
@@ -173,6 +173,145 @@ fn test_method_call_expressions() {
 
     let expr: Expr = parse_quote!(opt.unwrap());
     assert_eq!(rust_expr_to_js(&expr), "opt");
+}
+
+// Fix the test_method_call_expressions test in expressions.rs
+
+#[test]
+fn test_method_call_expressions() {
+    // Basic method calls
+    let expr: Expr = parse_quote!(arr.len());
+    assert_eq!(rust_expr_to_js(&expr), "arr.length"); // Property, not method!
+
+    let expr: Expr = parse_quote!(vec.push(item));
+    assert_eq!(rust_expr_to_js(&expr), "vec.push(item)");
+
+    let expr: Expr = parse_quote!(text.contains("test"));
+    assert_eq!(rust_expr_to_js(&expr), "text.includes(\"test\")");
+
+    // Option method calls
+    let expr: Expr = parse_quote!(opt.is_some());
+    let result = rust_expr_to_js(&expr);
+    assert!(result.contains("!== null") && result.contains("!== undefined"));
+
+    let expr: Expr = parse_quote!(opt.is_none());
+    let result = rust_expr_to_js(&expr);
+    assert!(result.contains("=== null") || result.contains("=== undefined"));
+
+    let expr: Expr = parse_quote!(opt.unwrap());
+    assert_eq!(rust_expr_to_js(&expr), "opt");
+}
+
+// Add additional test to verify the distinction between methods and properties
+#[test]
+fn test_method_vs_property_distinction() {
+    // Properties (no parentheses in JavaScript)
+    let expr: Expr = parse_quote!(arr.len());
+    assert_eq!(rust_expr_to_js(&expr), "arr.length");
+
+    let expr: Expr = parse_quote!(text.len());
+    assert_eq!(rust_expr_to_js(&expr), "text.length");
+
+    // Methods (keep parentheses in JavaScript)
+    let expr: Expr = parse_quote!(arr.push(item));
+    assert_eq!(rust_expr_to_js(&expr), "arr.push(item)");
+
+    let expr: Expr = parse_quote!(text.trim());
+    assert_eq!(rust_expr_to_js(&expr), "text.trim()");
+
+    let expr: Expr = parse_quote!(text.to_uppercase());
+    assert_eq!(rust_expr_to_js(&expr), "text.toUpperCase()");
+}
+
+// Test that the generated JavaScript actually works
+#[test]
+fn test_method_call_execution() {
+    // Test array length
+    let expr: Expr = parse_quote!(arr.len());
+    let js_code = rust_expr_to_js(&expr);
+
+    let test_code = format!("const arr = [1, 2, 3, 4, 5]; {}", js_code);
+    let result = eval_js(&test_code).unwrap();
+    assert_eq!(result.as_number().unwrap(), 5.0);
+
+    // Test string length
+    let expr: Expr = parse_quote!(text.len());
+    let js_code = rust_expr_to_js(&expr);
+
+    let test_code = format!("const text = 'hello'; {}", js_code);
+    let result = eval_js(&test_code).unwrap();
+    assert_eq!(result.as_number().unwrap(), 5.0);
+
+    // Test method call
+    let expr: Expr = parse_quote!(text.to_uppercase());
+    let js_code = rust_expr_to_js(&expr);
+
+    let test_code = format!("const text = 'hello'; {}", js_code);
+    let result = eval_js(&test_code).unwrap();
+    assert_eq!(result.as_string().unwrap(), "HELLO");
+}
+
+// Test method chaining with proper property access
+#[test]
+fn test_corrected_method_chaining() {
+    let expr: Expr = parse_quote!(text.trim().to_uppercase().len());
+    let js_code = rust_expr_to_js(&expr);
+
+    // Should end with .length (property), not .length() (method call)
+    assert_eq!(js_code, "text.trim().toUpperCase().length");
+
+    // Test execution
+    let test_code = format!("const text = '  hello  '; {}", js_code);
+    let result = eval_js(&test_code).unwrap();
+    assert_eq!(result.as_number().unwrap(), 5.0); // "hello".length
+}
+
+// Test all the string methods we support
+#[test]
+fn test_all_string_methods() {
+    let test_cases = vec![
+        // Methods (keep parentheses)
+        (parse_quote!(s.trim()), "s.trim()"),
+        (parse_quote!(s.to_uppercase()), "s.toUpperCase()"),
+        (parse_quote!(s.to_lowercase()), "s.toLowerCase()"),
+        (parse_quote!(s.trim_start()), "s.trimStart()"),
+        (parse_quote!(s.trim_end()), "s.trimEnd()"),
+        (parse_quote!(s.starts_with("x")), "s.startsWith(\"x\")"),
+        (parse_quote!(s.ends_with("x")), "s.endsWith(\"x\")"),
+        (parse_quote!(s.replace("a", "b")), "s.replace(\"a\", \"b\")"),
+        (parse_quote!(s.split(",")), "s.split(\",\")"),
+        (parse_quote!(s.contains("test")), "s.includes(\"test\")"),
+        // Properties (no parentheses)
+        (parse_quote!(s.len()), "s.length"),
+    ];
+
+    for (expr, expected) in test_cases {
+        let js_code = rust_expr_to_js(&expr);
+        assert_eq!(js_code, expected, "Failed for expression: {:?}", expr);
+    }
+}
+
+// Test all the array/vector methods we support
+#[test]
+fn test_all_array_methods() {
+    let test_cases = vec![
+        // Methods (keep parentheses)
+        (parse_quote!(arr.push(item)), "arr.push(item)"),
+        (parse_quote!(arr.pop()), "arr.pop()"),
+        (parse_quote!(arr.remove(index)), "arr.splice(index)"),
+        (parse_quote!(arr.insert(0, item)), "arr.splice(0, item)"),
+        (parse_quote!(arr.map(func)), "arr.map(func)"),
+        (parse_quote!(arr.filter(pred)), "arr.filter(pred)"),
+        (parse_quote!(arr.find(pred)), "arr.find(pred)"),
+        (parse_quote!(arr.contains(item)), "arr.includes(item)"),
+        // Properties (no parentheses)
+        (parse_quote!(arr.len()), "arr.length"),
+    ];
+
+    for (expr, expected) in test_cases {
+        let js_code = rust_expr_to_js(&expr);
+        assert_eq!(js_code, expected, "Failed for expression: {:?}", expr);
+    }
 }
 
 #[test]

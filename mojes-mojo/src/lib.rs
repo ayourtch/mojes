@@ -147,6 +147,31 @@ fn handle_macro_expr(mac: &syn::Macro) -> String {
             }
         }
 
+        "vec" => {
+            // Handle vec! macro - convert to JavaScript array literal
+            let tokens = &mac.tokens;
+            let token_string = tokens.to_string();
+
+            if token_string.trim().is_empty() {
+                // vec!() -> []
+                "[]".to_string()
+            } else if token_string.contains(";") {
+                // vec![value; count] -> Array.from({length: count}, () => value)
+                let parts: Vec<&str> = token_string.split(';').collect();
+                if parts.len() == 2 {
+                    let value = parts[0].trim();
+                    let count = parts[1].trim();
+                    format!("Array.from({{length: {}}}, () => {})", count, value)
+                } else {
+                    format!("[{}]", token_string) // Fallback
+                }
+            } else {
+                // vec![a, b, c] -> [a, b, c]
+                let token_string = token_string.replace(" , ", ", ");
+                format!("[{}]", token_string)
+            }
+        }
+
         x => panic!("/* Unsupported macro {} */", macro_name),
     }
 }
@@ -249,6 +274,45 @@ fn smart_comma_split(input: &str) -> Vec<String> {
 
 fn update_rust_expr_to_js_for_macros(expr: &Expr) -> Option<String> {
     match expr {
+        // Handle tuple expressions
+        Expr::Tuple(tuple_expr) => {
+            let elements: Vec<String> = tuple_expr
+                .elems
+                .iter()
+                .map(|elem| rust_expr_to_js(elem))
+                .collect();
+
+            Some(format!("[{}]", elements.join(", ")))
+        }
+        // Handle cast expressions (type conversion)
+        Expr::Cast(cast_expr) => {
+            let expr_js = rust_expr_to_js(&cast_expr.expr);
+            let target_type = format_rust_type(&cast_expr.ty);
+
+            // Handle different cast types
+            let result = match target_type.as_str() {
+                "number" => {
+                    // Casting to numeric types - use Number() for explicit conversion
+                    format!("Number({})", expr_js)
+                }
+                "string" => {
+                    // Casting to string - use String() or .toString()
+                    format!("String({})", expr_js)
+                }
+                "boolean" => {
+                    // Casting to boolean - use Boolean()
+                    format!("Boolean({})", expr_js)
+                }
+                _ => {
+                    // For other types, just use the expression with a comment
+                    format!(
+                        "{} /* was {} as {} in Rust */",
+                        expr_js, expr_js, target_type
+                    )
+                }
+            };
+            Some(result)
+        }
         Expr::Macro(mac_expr) => {
             // Handle macro expressions
             Some(handle_macro_expr(&mac_expr.mac))
@@ -594,6 +658,141 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
     }
 
     match expr {
+        // Handle array repeat expressions [value; count]
+        Expr::Repeat(repeat_expr) => {
+            let value_js = rust_expr_to_js(&repeat_expr.expr);
+            let count_js = rust_expr_to_js(&repeat_expr.len);
+
+            // Generate JavaScript array filled with the repeated value
+            format!("Array.from({{length: {}}}, () => {})", count_js, value_js)
+        }
+
+        // Handle loop expressions (infinite loops)
+        Expr::Loop(loop_expr) => {
+            let body_js = rust_block_to_js(&loop_expr.body);
+
+            // Convert to while(true) loop in JavaScript
+            // Note: break with values is complex, for now just handle basic loops
+            format!("while (true) {{\n{}}}", body_js)
+        }
+
+        // Handle break expressions
+        Expr::Break(break_expr) => {
+            if let Some(value) = &break_expr.expr {
+                let value_js = rust_expr_to_js(value);
+                // For now, just return the value (full break-with-value needs more complex handling)
+                format!("return {}; /* was break {} in Rust */", value_js, value_js)
+            } else {
+                "break;".to_string()
+            }
+        }
+
+        // Handle continue expressions
+        Expr::Continue(_) => "continue;".to_string(),
+
+        // Handle verbatim expressions (edge case)
+        Expr::Verbatim(x) => {
+            format!("/* Empty or verbatim expression: {:?} */", x)
+        }
+
+        Expr::Closure(closure) => {
+            // Extract parameter names
+            let params: Vec<String> = closure
+                .inputs
+                .iter()
+                .filter_map(|param| {
+                    if let syn::Pat::Ident(pat_ident) = param {
+                        Some(pat_ident.ident.to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Convert the body
+            let body_js = rust_expr_to_js(&closure.body);
+
+            // Generate JavaScript arrow function
+            if params.len() == 1 {
+                format!("{} => {}", params[0], body_js)
+            } else {
+                format!("({}) => {}", params.join(", "), body_js)
+            }
+        }
+
+        // Handle async blocks
+        Expr::Async(async_expr) => {
+            // Convert the async block to a regular async function
+            let block_js = rust_block_to_js(&async_expr.block);
+            format!("(async function() {{\n{}}})();", block_js)
+        }
+
+        // Handle await expressions
+        Expr::Await(await_expr) => {
+            let base_js = rust_expr_to_js(&await_expr.base);
+            format!("await {}", base_js)
+        }
+
+        // Handle range expressions
+        Expr::Range(range_expr) => {
+            match (&range_expr.start, &range_expr.end) {
+                (Some(start), Some(end)) => {
+                    let start_js = rust_expr_to_js(start);
+                    let end_js = rust_expr_to_js(end);
+
+                    // Check if it's inclusive (..=) or exclusive (..)
+                    match range_expr.limits {
+                        syn::RangeLimits::HalfOpen(_) => {
+                            // Exclusive range (1..10) -> Array.from({length: 10-1}, (_, i) => i + 1)
+                            format!(
+                                "Array.from({{length: {} - {}}}, (_, i) => i + {})",
+                                end_js, start_js, start_js
+                            )
+                        }
+                        syn::RangeLimits::Closed(_) => {
+                            // Inclusive range (1..=10) -> Array.from({length: 10-1+1}, (_, i) => i + 1)
+                            format!(
+                                "Array.from({{length: {} - {} + 1}}, (_, i) => i + {})",
+                                end_js, start_js, start_js
+                            )
+                        }
+                    }
+                }
+                (Some(start), None) => {
+                    // Range from start (1..) - not easily representable in JS
+                    let start_js = rust_expr_to_js(start);
+                    format!("/* Range from {} (infinite) */", start_js)
+                }
+                (None, Some(end)) => {
+                    // Range to end (..10) -> Array.from({length: 10}, (_, i) => i)
+                    let end_js = rust_expr_to_js(end);
+                    format!("Array.from({{length: {}}}, (_, i) => i)", end_js)
+                }
+                (None, None) => {
+                    // Full range (..) - infinite range
+                    "/* Full range (..) - infinite */".to_string()
+                }
+            }
+        }
+
+        // Handle try expressions (? operator)
+        Expr::Try(try_expr) => {
+            let base_js = rust_expr_to_js(&try_expr.expr);
+            // In JavaScript, we can simulate the ? operator with optional chaining or try/catch
+            // For now, just add a comment indicating it was a try operation
+            format!("{} /* was {}? in Rust */", base_js, base_js)
+        }
+
+        // Handle let expressions (if let, while let, etc.)
+        Expr::Let(let_expr) => {
+            // This is complex - for now, generate a comment
+            let expr_js = rust_expr_to_js(&let_expr.expr);
+            format!("/* let pattern = {} */", expr_js)
+        }
+
+        // Handle macro expressions that aren't covered by update_rust_expr_to_js_for_macros
+        Expr::Macro(macro_expr) => handle_macro_expr(&macro_expr.mac),
+
         // Handle while loops
         Expr::While(while_expr) => handle_while_expr(while_expr),
 
@@ -699,7 +898,10 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
 
             // Map Rust methods to JavaScript methods
             let js_method = match method_name.as_str() {
-                "len" => "length",
+                "len" => {
+                    // Special case: .len() becomes .length (property, not method)
+                    return format!("{}.length", receiver);
+                }
                 "push" => "push",
                 "pop" => "pop",
                 "remove" => "splice",
@@ -813,6 +1015,8 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
         // Handle paths (variables, constant references)
         Expr::Path(path) => {
             if let Some(last_segment) = path.path.segments.last() {
+                let ident_str = last_segment.ident.to_string();
+
                 // Special case for common Rust constants
                 match last_segment.ident.to_string().as_str() {
                     "None" => "null".to_string(),
@@ -823,7 +1027,7 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
                     "Inactive" => "Status.Inactive".to_string(),
                     "Pending" => "Status.Pending".to_string(),
                     "Custom" => "Status.Custom".to_string(),
-                    _ => last_segment.ident.to_string(),
+                    _ => escape_js_identifier(&ident_str), // Use escaped version
                 }
             } else {
                 panic!("/* Unsupported path */");
@@ -1347,6 +1551,82 @@ fn is_string_expr(expr: &Expr) -> bool {
         }
         Expr::MethodCall(method) => method.method == "to_string",
         _ => false,
+    }
+}
+
+// Make sure this function exists and is used:
+pub fn escape_js_identifier(rust_ident: &str) -> String {
+    const JS_RESERVED: &[&str] = &[
+        "abstract",
+        "arguments",
+        "await",
+        "boolean",
+        "break",
+        "byte",
+        "case",
+        "catch",
+        "char",
+        "class",
+        "const",
+        "continue",
+        "debugger",
+        "default",
+        "delete",
+        "do",
+        "double",
+        "else",
+        "enum",
+        "eval",
+        "export",
+        "extends",
+        "false",
+        "final",
+        "finally",
+        "float",
+        "for",
+        "function",
+        "goto",
+        "if",
+        "implements",
+        "import",
+        "in",
+        "instanceof",
+        "int",
+        "interface",
+        "let",
+        "long",
+        "native",
+        "new",
+        "null",
+        "package",
+        "private",
+        "protected",
+        "public",
+        "return",
+        "short",
+        "static",
+        "super",
+        "switch",
+        "synchronized",
+        "this",
+        "throw",
+        "throws",
+        "transient",
+        "true",
+        "try",
+        "typeof",
+        "var",
+        "void",
+        "volatile",
+        "while",
+        "with",
+        "yield",
+    ];
+
+    if JS_RESERVED.contains(&rust_ident) {
+        format!("{}_", rust_ident)
+    } else {
+        rust_ident.to_string()
     }
 }
 

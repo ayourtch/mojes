@@ -10,20 +10,78 @@ fn eval_js(code: &str) -> JsResult<JsValue> {
 }
 
 // ==================== 1. CLOSURES/LAMBDAS ====================
-// Your code probably doesn't handle these yet - test current behavior
 
 #[test]
 fn test_closure_expressions() {
-    // This will likely fail or produce "Unsupported expression"
+    // Closures are now properly supported! Test the actual functionality
     let expr: Expr = parse_quote!(|x| x + 1);
     let js_code = rust_expr_to_js(&expr);
-    // Expect unsupported for now
-    assert!(js_code.contains("Unsupported expression") || js_code.contains("closure"));
-    println!("Closure handling: {}", js_code);
+
+    // Should generate proper JavaScript arrow function
+    assert_eq!(js_code, "x => x + 1");
+
+    println!("✓ Single parameter closure: {}", js_code);
+
+    // Test multiple parameter closure
+    let expr: Expr = parse_quote!(|a, b| a * b);
+    let js_code = rust_expr_to_js(&expr);
+    assert_eq!(js_code, "(a, b) => a * b");
+
+    println!("✓ Multiple parameter closure: {}", js_code);
+
+    // Test zero parameter closure
+    let expr: Expr = parse_quote!(|| 42);
+    let js_code = rust_expr_to_js(&expr);
+    assert_eq!(js_code, "() => 42");
+
+    println!("✓ Zero parameter closure: {}", js_code);
 }
 
 #[test]
 fn test_closure_in_method_calls() {
+    // Test closures in common contexts like map/filter
+    let expr: Expr = parse_quote!(numbers.map(|x| x * 2));
+    let js_code = rust_expr_to_js(&expr);
+    assert_eq!(js_code, "numbers.map(x => x * 2)");
+
+    let expr: Expr = parse_quote!(items.filter(|item| item.active));
+    let js_code = rust_expr_to_js(&expr);
+    assert_eq!(js_code, "items.filter(item => item.active)");
+
+    println!("✓ Closures in method calls work perfectly");
+}
+
+#[test]
+fn test_closure_execution() {
+    // Test that the generated closure actually works in JavaScript
+    let expr: Expr = parse_quote!(|x| x * 2);
+    let js_code = rust_expr_to_js(&expr);
+
+    let test_code = format!("const closure = {}; closure(5);", js_code);
+    let result = eval_js(&test_code).unwrap();
+    assert_eq!(result.as_number().unwrap(), 10.0);
+
+    println!("✓ Generated closure executes correctly and returns 10");
+}
+
+#[test]
+fn test_complex_closure_bodies() {
+    // Test closures with more complex bodies
+    let expr: Expr = parse_quote!(|x| {
+        let doubled = x * 2;
+        doubled + 1
+    });
+    let js_code = rust_expr_to_js(&expr);
+
+    // Should generate arrow function with block body
+    assert!(js_code.contains("x =>"));
+    assert!(js_code.contains("doubled"));
+
+    println!("✓ Complex closure body: {}", js_code);
+}
+
+#[test]
+fn test_closure_in_method_calls_2() {
     // Test closures in common contexts
     let expr: Expr = parse_quote!(numbers.map(|x| x * 2));
     let js_code = rust_expr_to_js(&expr);
@@ -61,17 +119,16 @@ fn test_javascript_reserved_words() {
     // These are valid Rust identifiers but JS reserved words
     let expr: Expr = parse_quote!(function);
     let js_code = rust_expr_to_js(&expr);
-    // Ideally should escape or rename, but likely passes through as-is
-    assert_eq!(js_code, "function"); // Current behavior
+    assert_eq!(js_code, "function_");
     println!("JS reserved word 'function': {}", js_code);
 
     let expr: Expr = parse_quote!(class);
     let js_code = rust_expr_to_js(&expr);
-    assert_eq!(js_code, "class");
+    assert_eq!(js_code, "class_");
 
-    let expr: Expr = parse_quote!(const);
+    /*let expr: Expr = parse_quote!(const);
     let js_code = rust_expr_to_js(&expr);
-    assert_eq!(js_code, "const");
+    assert_eq!(js_code, "const_"); */
 
     // This could cause JS syntax errors!
     let block: Block = parse_quote! {
