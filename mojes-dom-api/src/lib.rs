@@ -867,3 +867,271 @@ pub fn decodeURIComponent(uri: &str) -> String {
     // Mock implementation
     uri.to_string()
 }
+
+// localStorage API implementation for mojes-dom-api/src/lib.rs
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+// Global mock storage for localStorage (in real implementation this would be browser storage)
+lazy_static::lazy_static! {
+    static ref LOCAL_STORAGE: Mutex<HashMap<String, String>> = Mutex::new(HashMap::new());
+}
+
+/// localStorage object that provides Web Storage interface for storing data locally
+pub struct LocalStorage;
+
+impl LocalStorage {
+    /// Sets the value of the pair identified by key to value, creating a new key/value pair if none existed for key previously.
+    ///
+    /// # Examples
+    /// ```javascript
+    /// localStorage.setItem("username", "john_doe");
+    /// localStorage.setItem("theme", "dark");
+    /// ```
+    pub fn setItem(&self, key: &str, value: &str) {
+        let mut storage = LOCAL_STORAGE.lock().unwrap();
+        storage.insert(key.to_string(), value.to_string());
+    }
+
+    /// Returns the current value associated with the given key, or null if the given key does not exist.
+    ///
+    /// # Examples
+    /// ```javascript
+    /// let username = localStorage.getItem("username"); // Some("john_doe")
+    /// let missing = localStorage.getItem("nonexistent"); // None
+    /// ```
+    pub fn getItem(&self, key: &str) -> Option<String> {
+        let storage = LOCAL_STORAGE.lock().unwrap();
+        storage.get(key).cloned()
+    }
+
+    /// Removes the key/value pair with the given key, if a key/value pair with the given key exists.
+    ///
+    /// # Examples
+    /// ```javascript
+    /// localStorage.removeItem("username");
+    /// ```
+    pub fn removeItem(&self, key: &str) {
+        let mut storage = LOCAL_STORAGE.lock().unwrap();
+        storage.remove(key);
+    }
+
+    /// Removes all key/value pairs, if there are any.
+    ///
+    /// # Examples
+    /// ```javascript
+    /// localStorage.clear();
+    /// ```
+    pub fn clear(&self) {
+        let mut storage = LOCAL_STORAGE.lock().unwrap();
+        storage.clear();
+    }
+
+    /// Returns the name of the nth key, or null if n is greater than or equal to the number of key/value pairs.
+    ///
+    /// # Examples
+    /// ```javascript
+    /// let first_key = localStorage.key(0); // Some("username")
+    /// let invalid = localStorage.key(999); // None
+    /// ```
+    pub fn key(&self, index: usize) -> Option<String> {
+        let storage = LOCAL_STORAGE.lock().unwrap();
+        storage.keys().nth(index).cloned()
+    }
+
+    /// Returns the number of key/value pairs.
+    ///
+    /// # Examples
+    /// ```javascript
+    /// let count = localStorage.length(); // 2
+    /// ```
+    pub fn length(&self) -> usize {
+        let storage = LOCAL_STORAGE.lock().unwrap();
+        storage.len()
+    }
+
+    /// Store a JSON-serializable value in localStorage
+    ///
+    /// # Examples
+    /// ```javascript
+    /// localStorage.setJSON("user_prefs", userPreferences);
+    /// ```
+    #[cfg(feature = "serde")]
+    pub fn setJSON<T: serde::Serialize>(&self, key: &str, value: &T) -> Result<(), String> {
+        match serde_json::to_string(value) {
+            Ok(json_string) => {
+                self.setItem(key, &json_string);
+                Ok(())
+            }
+            Err(e) => Err(format!("Failed to serialize to JSON: {}", e)),
+        }
+    }
+
+    /// Retrieve and deserialize a JSON value from localStorage
+    ///
+    /// # Examples
+    /// ```javascript
+    /// let userPrefs = localStorage.getJSON("user_prefs");
+    /// ```
+    #[cfg(feature = "serde")]
+    pub fn getJSON<T: serde::de::DeserializeOwned>(&self, key: &str) -> Result<Option<T>, String> {
+        match self.getItem(key) {
+            Some(json_string) => match serde_json::from_str(&json_string) {
+                Ok(value) => Ok(Some(value)),
+                Err(e) => Err(format!("Failed to deserialize JSON: {}", e)),
+            },
+            None => Ok(None),
+        }
+    }
+}
+
+/// Global localStorage instance - use this in your code
+pub static localStorage: LocalStorage = LocalStorage;
+
+/// sessionStorage object (similar to localStorage but session-scoped)
+pub struct SessionStorage;
+
+impl SessionStorage {
+    pub fn setItem(&self, key: &str, value: &str) {
+        // For now, just use the same storage as localStorage
+        // In a real implementation, this would be separate session storage
+        localStorage.setItem(key, value);
+    }
+
+    pub fn getItem(&self, key: &str) -> Option<String> {
+        localStorage.getItem(key)
+    }
+
+    pub fn removeItem(&self, key: &str) {
+        localStorage.removeItem(key);
+    }
+
+    pub fn clear(&self) {
+        localStorage.clear();
+    }
+
+    pub fn key(&self, index: usize) -> Option<String> {
+        localStorage.key(index)
+    }
+
+    pub fn length(&self) -> usize {
+        localStorage.length()
+    }
+
+    #[cfg(feature = "serde")]
+    pub fn setJSON<T: serde::Serialize>(&self, key: &str, value: &T) -> Result<(), String> {
+        localStorage.setJSON(key, value)
+    }
+
+    #[cfg(feature = "serde")]
+    pub fn getJSON<T: serde::de::DeserializeOwned>(&self, key: &str) -> Result<Option<T>, String> {
+        localStorage.getJSON(key)
+    }
+}
+
+/// Global sessionStorage instance
+pub static sessionStorage: SessionStorage = SessionStorage;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_local_storage_basic_operations() {
+        // Clear any existing data
+        localStorage.clear();
+
+        // Test setItem and getItem
+        localStorage.setItem("test_key", "test_value");
+        assert_eq!(
+            localStorage.getItem("test_key"),
+            Some("test_value".to_string())
+        );
+
+        // Test length
+        assert_eq!(localStorage.length(), 1);
+
+        // Test key
+        assert_eq!(localStorage.key(0), Some("test_key".to_string()));
+        assert_eq!(localStorage.key(1), None);
+
+        // Test removeItem
+        localStorage.removeItem("test_key");
+        assert_eq!(localStorage.getItem("test_key"), None);
+        assert_eq!(localStorage.length(), 0);
+    }
+
+    #[test]
+    fn test_local_storage_multiple_items() {
+        localStorage.clear();
+
+        // Add multiple items
+        localStorage.setItem("user", "john");
+        localStorage.setItem("theme", "dark");
+        localStorage.setItem("lang", "en");
+
+        assert_eq!(localStorage.length(), 3);
+
+        // Test getting all keys
+        let mut keys = Vec::new();
+        for i in 0..localStorage.length() {
+            if let Some(key) = localStorage.key(i) {
+                keys.push(key);
+            }
+        }
+
+        assert!(keys.contains(&"user".to_string()));
+        assert!(keys.contains(&"theme".to_string()));
+        assert!(keys.contains(&"lang".to_string()));
+
+        // Test clear
+        localStorage.clear();
+        assert_eq!(localStorage.length(), 0);
+    }
+
+    #[test]
+    fn test_session_storage() {
+        sessionStorage.clear();
+
+        sessionStorage.setItem("session_test", "value");
+        assert_eq!(
+            sessionStorage.getItem("session_test"),
+            Some("value".to_string())
+        );
+        assert_eq!(sessionStorage.length(), 1);
+
+        sessionStorage.removeItem("session_test");
+        assert_eq!(sessionStorage.length(), 0);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_json_helpers() {
+        use serde::{Deserialize, Serialize};
+
+        #[derive(Serialize, Deserialize, PartialEq, Debug)]
+        struct User {
+            name: String,
+            age: u32,
+        }
+
+        localStorage.clear();
+
+        let user = User {
+            name: "Alice".to_string(),
+            age: 30,
+        };
+
+        // Store JSON
+        localStorage.setJSON("user_data", &user).unwrap();
+
+        // Retrieve JSON
+        let retrieved: User = localStorage.getJSON("user_data").unwrap().unwrap();
+        assert_eq!(retrieved, user);
+
+        // Test non-existent key
+        let missing: Result<Option<User>, String> = localStorage.getJSON("missing");
+        assert_eq!(missing.unwrap(), None);
+    }
+}
