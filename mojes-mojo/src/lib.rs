@@ -983,6 +983,40 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
 
         // Handle function calls and format! macro
         Expr::Call(call) => {
+            if let Expr::Path(path) = &*call.func {
+                if path.path.segments.len() == 2 {
+                    let type_name = path.path.segments[0].ident.to_string();
+                    let method_name = path.path.segments[1].ident.to_string();
+
+                    if method_name == "new" {
+                        // List of types that should use JavaScript "new" constructor
+                        let js_constructor_types = [
+                            "XMLHttpRequest",
+                            "XMLHttpRequestUpload",
+                            "ProgressEvent",
+                            "Element",
+                            "Document",
+                            "Window",
+                            "Console",
+                            "Arc",
+                            "Mutex",
+                        ];
+                        let skip_js_constructor_types = ["Arc"];
+                        if skip_js_constructor_types.contains(&type_name.as_str()) {
+                            // This constructor should be removed from the call tree
+                            let args: Vec<String> =
+                                call.args.iter().map(|arg| rust_expr_to_js(arg)).collect();
+                            return format!("{}", args.join(", "));
+                        }
+
+                        if js_constructor_types.contains(&type_name.as_str()) {
+                            let args: Vec<String> =
+                                call.args.iter().map(|arg| rust_expr_to_js(arg)).collect();
+                            return format!("new {}({})", type_name, args.join(", "));
+                        }
+                    }
+                }
+            }
             // Get the function name
             let func_name = match &*call.func {
                 Expr::Path(path) => {
@@ -993,11 +1027,53 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
                             "eprintln" | "eprint" => "console.error".to_string(),
                             "format" => "".to_string(), // format! becomes string template in JS
                             "Some" => "".to_string(),   // Option::Some becomes just the value in JS
-                            _ => name,
+                            _ => format!("{}", name),
                         }
                     } else {
                         panic!("/* Unsupported function path */");
                     }
+                }
+                Expr::MethodCall(method_call) => {
+                    let receiver = rust_expr_to_js(&method_call.receiver);
+                    let method_name = method_call.method.to_string();
+
+                    // Check if this is a constructor call (Type::new())
+                    if method_name == "new" {
+                        // Check if the receiver is a type name that should use "new" in JS
+                        if let Expr::Path(path) = &*method_call.receiver {
+                            if let Some(last_segment) = path.path.segments.last() {
+                                let type_name = last_segment.ident.to_string();
+
+                                // List of types that should use JavaScript "new" constructor
+                                let js_constructor_types = [
+                                    "XMLHttpRequest",
+                                    "XMLHttpRequestUpload",
+                                    "ProgressEvent",
+                                    "Element",
+                                    "Document",
+                                    "Window",
+                                    "Console",
+                                    "Date",
+                                    "Array",
+                                    "Object",
+                                    "Map",
+                                    "Set",
+                                    "RegExp",
+                                    "Error",
+                                    "Promise",
+                                ];
+
+                                if js_constructor_types.contains(&type_name.as_str()) {
+                                    // Convert arguments
+                                    let args: Vec<String> =
+                                        call.args.iter().map(|arg| rust_expr_to_js(arg)).collect();
+                                    return format!("new {}({})", type_name, args.join(", "));
+                                }
+                            }
+                        }
+                    }
+
+                    format!("{}.{}", receiver, method_name)
                 }
                 _ => rust_expr_to_js(&call.func),
             };
@@ -1035,6 +1111,11 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
                 "len" => {
                     // Special case: .len() becomes .length (property, not method)
                     return format!("{}.length", receiver);
+                }
+                "clone" => {
+                    // Special case, use shallow copy
+                    // return format!("Object.assign({{}}, {})", receiver);
+                    return format!("{}", receiver);
                 }
                 "push" => "push",
                 "pop" => "pop",
