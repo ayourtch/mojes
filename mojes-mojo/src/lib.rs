@@ -499,10 +499,11 @@ fn handle_while_expr(expr: &syn::ExprWhile) -> String {
 }
 
 // Handle for loops
-// Handle for loops
 fn handle_for_expr(expr: &syn::ExprForLoop) -> String {
     // Check if this is an enumerate pattern: for (i, item) in collection.iter().enumerate()
-    if let (Pat::Tuple(tuple_pat), Some(enumerate_info)) = (&*expr.pat, detect_enumerate_pattern(&expr.expr)) {
+    if let (Pat::Tuple(tuple_pat), Some(enumerate_info)) =
+        (&*expr.pat, detect_enumerate_pattern(&expr.expr))
+    {
         // This is a for (i, item) in collection.iter().enumerate() pattern
         if tuple_pat.elems.len() == 2 {
             let index_var = if let Pat::Ident(ref pat_ident) = tuple_pat.elems[0] {
@@ -510,7 +511,7 @@ fn handle_for_expr(expr: &syn::ExprForLoop) -> String {
             } else {
                 "i".to_string()
             };
-            
+
             let item_var = if let Pat::Ident(ref pat_ident) = tuple_pat.elems[1] {
                 pat_ident.ident.to_string()
             } else {
@@ -518,32 +519,16 @@ fn handle_for_expr(expr: &syn::ExprForLoop) -> String {
             };
 
             let iterable_js = enumerate_info.collection;
-            let body_js = rust_block_to_js(&expr.body);
+            // Process statements directly, not as a block expression
+            let body_js = rust_block_statements_to_js(&expr.body);
 
-            let trimmed_body = body_js
-                .lines()
-                .map(|line| {
-                    if line.starts_with("  ") {
-                        line[2..].to_string()
-                    } else {
-                        line.to_string()
-                    }
-                })
-                .collect::<Vec<String>>()
-                .join("\n");
-
- return format!(
-    "let {} = -1;\nfor (const {} of {}) {{\n{}++; {}\n}}",
-    index_var, item_var, iterable_js, index_var, trimmed_body
-);
-
-            // Wrap in Array.from() to handle NodeLists
             return format!(
-                "for (const [{}, {}] of Array.from({}).map((item, index) => [index, item])) {{\n{}\n}}",
-                index_var, item_var, iterable_js, trimmed_body
+                "let {} = 0;\nfor (const {} of {}) {{\n{}\n  {}++;\n}}",
+                index_var, item_var, iterable_js, body_js, index_var
             );
         }
     }
+
     // Handle regular iteration patterns
     let var_name = if let Pat::Ident(pat_ident) = &*expr.pat {
         pat_ident.ident.to_string()
@@ -553,24 +538,130 @@ fn handle_for_expr(expr: &syn::ExprForLoop) -> String {
 
     // Convert the iterable expression, handling .iter() method calls
     let iterable_js = convert_iterable_expr(&expr.expr);
-    let body_js = rust_block_to_js(&expr.body);
-
-    let trimmed_body = body_js
-        .lines()
-        .map(|line| {
-            if line.starts_with("  ") {
-                line[2..].to_string()
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<String>>()
-        .join("\n");
+    // Process statements directly, not as a block expression
+    let body_js = rust_block_statements_to_js(&expr.body);
 
     format!(
         "for (const {} of {}) {{\n{}\n}}",
-        var_name, iterable_js, trimmed_body
+        var_name, iterable_js, body_js
     )
+}
+
+fn handle_local_statement(local: &syn::Local) -> String {
+    // Handle variable declarations
+    if let Some(init) = &local.init {
+        // We directly access the expr from the init
+        let init_expr = &init.expr;
+
+        match &local.pat {
+            Pat::Ident(pat_ident) => {
+                let var_name = pat_ident.ident.to_string();
+                let init_js = rust_expr_to_js(init_expr);
+
+                // Check for mutability
+                if pat_ident.mutability.is_some() {
+                    format!("  let {} = {};\n", var_name, init_js)
+                } else {
+                    format!("  const {} = {};\n", var_name, init_js)
+                }
+            }
+            // Handle destructuring patterns
+            Pat::Tuple(tuple_pat) => {
+                let vars: Vec<String> = tuple_pat
+                    .elems
+                    .iter()
+                    .filter_map(|pat| {
+                        if let Pat::Ident(pat_ident) = pat {
+                            Some(pat_ident.ident.to_string())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                let init_js = rust_expr_to_js(init_expr);
+                format!("  const [{}] = {};\n", vars.join(", "), init_js)
+            }
+            Pat::Struct(struct_pat) => {
+                let fields: Vec<String> = struct_pat
+                    .fields
+                    .iter()
+                    .filter_map(|field| {
+                        if let Pat::Ident(pat_ident) = &*field.pat {
+                            Some(pat_ident.ident.to_string())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                let init_js = rust_expr_to_js(init_expr);
+                format!("  const {{ {} }} = {};\n", fields.join(", "), init_js)
+            }
+            x => panic!("  /* Unsupported destructuring pattern: {:?}  */\n", x),
+        }
+    } else {
+        // Variable declaration without initialization
+        match &local.pat {
+            Pat::Ident(pat_ident) => {
+                let var_name = pat_ident.ident.to_string();
+
+                // Check for mutability
+                if pat_ident.mutability.is_some() {
+                    format!("  let {};\n", var_name)
+                } else {
+                    format!("  let {};\n", var_name)
+                }
+            }
+            x => panic!("  /* Unsupported variable pattern: {:?}  */\n", x),
+        }
+    }
+}
+
+// Add this helper function to process block statements without IIFE wrapping
+fn rust_block_statements_to_js(block: &syn::Block) -> String {
+    let mut js_code = String::new();
+
+    for stmt in &block.stmts {
+        let stmt_js = match stmt {
+            Stmt::Local(local) => {
+                let var_name = if let Pat::Ident(ref pat_ident) = local.pat {
+                    pat_ident.ident.to_string()
+                } else {
+                    "unknown".to_string()
+                };
+
+                match &local.init {
+                    Some(init) => {
+                        let init_js = rust_expr_to_js(&init.expr);
+                        format!("  let {} = {};", var_name, init_js)
+                    }
+                    None => {
+                        format!("  let {};", var_name)
+                    }
+                }
+            }
+            Stmt::Expr(expr, Some(_)) => {
+                let js_expr = rust_expr_to_js(expr);
+                format!("  {};", js_expr)
+            }
+            Stmt::Expr(expr, None) => {
+                let js_expr = rust_expr_to_js(expr);
+                format!("  {};", js_expr)
+            }
+            Stmt::Item(_) => "  /* item statement */".to_string(),
+            _ => "  /* unknown statement */".to_string(),
+        };
+
+        if !stmt_js.trim().is_empty() {
+            js_code.push_str(&stmt_js);
+            if !stmt_js.ends_with('\n') {
+                js_code.push('\n');
+            }
+        }
+    }
+
+    js_code.trim_end().to_string()
 }
 
 // Helper function to detect enumerate patterns
@@ -615,7 +706,7 @@ fn convert_iterable_expr(expr: &Expr) -> String {
                 }
             }
         }
-        _ => rust_expr_to_js(expr)
+        _ => rust_expr_to_js(expr),
     }
 }
 
@@ -651,76 +742,7 @@ pub fn rust_block_to_js(block: &Block) -> String {
                     }
                 }
             }
-            Stmt::Local(local) => {
-                // Handle variable declarations
-                if let Some(init) = &local.init {
-                    // We directly access the expr from the init
-                    let init_expr = &init.expr;
-
-                    match &local.pat {
-                        Pat::Ident(pat_ident) => {
-                            let var_name = pat_ident.ident.to_string();
-                            let init_js = rust_expr_to_js(init_expr);
-
-                            // Check for mutability
-                            if pat_ident.mutability.is_some() {
-                                format!("  let {} = {};\n", var_name, init_js)
-                            } else {
-                                format!("  const {} = {};\n", var_name, init_js)
-                            }
-                        }
-                        // Handle destructuring patterns
-                        Pat::Tuple(tuple_pat) => {
-                            let vars: Vec<String> = tuple_pat
-                                .elems
-                                .iter()
-                                .filter_map(|pat| {
-                                    if let Pat::Ident(pat_ident) = pat {
-                                        Some(pat_ident.ident.to_string())
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-
-                            let init_js = rust_expr_to_js(init_expr);
-                            format!("  const [{}] = {};\n", vars.join(", "), init_js)
-                        }
-                        Pat::Struct(struct_pat) => {
-                            let fields: Vec<String> = struct_pat
-                                .fields
-                                .iter()
-                                .filter_map(|field| {
-                                    if let Pat::Ident(pat_ident) = &*field.pat {
-                                        Some(pat_ident.ident.to_string())
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-
-                            let init_js = rust_expr_to_js(init_expr);
-                            format!("  const {{ {} }} = {};\n", fields.join(", "), init_js)
-                        }
-                        x => panic!("  /* Unsupported destructuring pattern: {:?}  */\n", x),
-                    }
-                } else {
-                    // Variable declaration without initialization
-                    match &local.pat {
-                        Pat::Ident(pat_ident) => {
-                            let var_name = pat_ident.ident.to_string();
-
-                            // Check for mutability
-                            if pat_ident.mutability.is_some() {
-                                format!("  let {};\n", var_name)
-                            } else {
-                                format!("  let {};\n", var_name)
-                            }
-                        }
-                        x => panic!("  /* Unsupported variable pattern: {:?}  */\n", x),
-                    }
-                }
-            }
+            Stmt::Local(local) => handle_local_statement(local),
             Stmt::Macro(mac_stmt) => {
                 let macro_result = handle_macro_expr(&mac_stmt.mac);
                 // Add proper indentation and semicolon for macro statements
