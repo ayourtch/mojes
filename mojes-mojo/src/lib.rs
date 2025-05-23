@@ -708,15 +708,37 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
                     }
                 })
                 .collect();
+            // Handle closure body specially
+            let body_js = match &*closure.body {
+                // If the closure body is a block, handle it directly without IIFE wrapping
+                Expr::Block(block_expr) => {
+                    let block_content = rust_block_to_js(&block_expr.block);
+                    // Remove the outer braces and IIFE wrapping for closure context
+                    let trimmed = block_content.trim();
+                    if trimmed.starts_with("(function()") && trimmed.ends_with("})()") {
+                        // Extract the inner content
+                        let inner = &trimmed[12..trimmed.len() - 4]; // Remove "(function() {" and "})()"
+                        format!("{{{}}}", inner)
+                    } else {
+                        format!("{{{}}}", block_content)
+                    }
+                }
+                // For single expressions, convert normally
+                _ => {
+                    let expr_js = rust_expr_to_js(&closure.body);
+                    // If it's a simple expression, don't wrap in braces
+                    if expr_js.contains("return ") || expr_js.contains("(function()") {
+                        format!("{{{}}}", expr_js)
+                    } else {
+                        expr_js
+                    }
+                }
+            };
 
-            // Convert the body
-            let body_js = rust_expr_to_js(&closure.body);
-
-            // Generate JavaScript arrow function
             if params.len() == 1 {
-                format!("{} => {} /* Xclosure */", params[0], body_js)
+                format!("{} => {}", params[0], body_js)
             } else {
-                format!("({}) => {} /* XXclosure */", params.join(", "), body_js)
+                format!("({}) => {}", params.join(", "), body_js)
             }
         }
 
