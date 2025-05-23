@@ -961,7 +961,6 @@ impl LocalStorage {
     /// ```javascript
     /// localStorage.setJSON("user_prefs", userPreferences);
     /// ```
-    #[cfg(feature = "serde")]
     pub fn setJSON<T: serde::Serialize>(&self, key: &str, value: &T) -> Result<(), String> {
         match serde_json::to_string(value) {
             Ok(json_string) => {
@@ -978,7 +977,6 @@ impl LocalStorage {
     /// ```javascript
     /// let userPrefs = localStorage.getJSON("user_prefs");
     /// ```
-    #[cfg(feature = "serde")]
     pub fn getJSON<T: serde::de::DeserializeOwned>(&self, key: &str) -> Result<Option<T>, String> {
         match self.getItem(key) {
             Some(json_string) => match serde_json::from_str(&json_string) {
@@ -1023,12 +1021,10 @@ impl SessionStorage {
         localStorage.length()
     }
 
-    #[cfg(feature = "serde")]
     pub fn setJSON<T: serde::Serialize>(&self, key: &str, value: &T) -> Result<(), String> {
         localStorage.setJSON(key, value)
     }
 
-    #[cfg(feature = "serde")]
     pub fn getJSON<T: serde::de::DeserializeOwned>(&self, key: &str) -> Result<Option<T>, String> {
         localStorage.getJSON(key)
     }
@@ -1109,7 +1105,6 @@ mod tests {
         assert_eq!(sessionStorage.length(), 0);
     }
 
-    #[cfg(feature = "serde")]
     #[test]
     fn test_json_helpers() {
         use serde::{Deserialize, Serialize};
@@ -1141,6 +1136,7 @@ mod tests {
 }
 
 // XMLHttpRequest implementation for mojes-dom-api
+// XMLHttpRequest implementation for mojes-dom-api with closure handlers
 // Add this to your lib.rs file
 
 // use std::collections::HashMap;
@@ -1177,16 +1173,15 @@ pub struct XMLHttpRequest {
     headers: HashMap<String, String>,
     request_body: Option<String>,
 
-    // Event handlers (stored as function pointers for mock implementation)
-    // In a real implementation, these would be proper closures
-    onreadystatechange: Option<fn()>,
-    onload: Option<fn()>,
-    onerror: Option<fn()>,
-    onabort: Option<fn()>,
-    onloadstart: Option<fn()>,
-    onloadend: Option<fn()>,
-    onprogress: Option<fn()>,
-    ontimeout: Option<fn()>,
+    // Event handlers using Box<dyn Fn()> for closure support
+    onreadystatechange: Option<Box<dyn Fn()>>,
+    onload: Option<Box<dyn Fn()>>,
+    onerror: Option<Box<dyn Fn()>>,
+    onabort: Option<Box<dyn Fn()>>,
+    onloadstart: Option<Box<dyn Fn()>>,
+    onloadend: Option<Box<dyn Fn()>>,
+    onprogress: Option<Box<dyn Fn()>>,
+    ontimeout: Option<Box<dyn Fn()>>,
 }
 
 impl XMLHttpRequest {
@@ -1231,17 +1226,17 @@ impl XMLHttpRequest {
             self.statusText = String::new();
 
             // Trigger abort event
-            if let Some(callback) = self.onabort {
+            if let Some(ref callback) = self.onabort {
                 callback();
             }
 
             // Trigger readystatechange
-            if let Some(callback) = self.onreadystatechange {
+            if let Some(ref callback) = self.onreadystatechange {
                 callback();
             }
 
             // Trigger loadend
-            if let Some(callback) = self.onloadend {
+            if let Some(ref callback) = self.onloadend {
                 callback();
             }
         }
@@ -1314,7 +1309,7 @@ impl XMLHttpRequest {
         self.headers.clear();
 
         // Trigger readystatechange
-        if let Some(callback) = self.onreadystatechange {
+        if let Some(ref callback) = self.onreadystatechange {
             callback();
         }
     }
@@ -1352,7 +1347,7 @@ impl XMLHttpRequest {
         self.request_body = body.map(|s| s.to_string());
 
         // Trigger loadstart
-        if let Some(callback) = self.onloadstart {
+        if let Some(ref callback) = self.onloadstart {
             callback();
         }
 
@@ -1407,92 +1402,102 @@ impl XMLHttpRequest {
     /// Set onreadystatechange event handler
     pub fn set_onreadystatechange<F>(&mut self, callback: Option<F>)
     where
-        F: FnOnce() + 'static,
+        F: Fn() + 'static,
     {
-        // In mock implementation, we can't store closures easily
-        // This would be handled differently in the real browser environment
         println!("XMLHttpRequest.onreadystatechange = [function]");
-        // For now, just store a flag that a callback was set
+        self.onreadystatechange = callback.map(|f| Box::new(f) as Box<dyn Fn()>);
     }
 
     /// Set onload event handler
     pub fn set_onload<F>(&mut self, callback: Option<F>)
     where
-        F: FnOnce() + 'static,
+        F: Fn() + 'static,
     {
         println!("XMLHttpRequest.onload = [function]");
+        self.onload = callback.map(|f| Box::new(f) as Box<dyn Fn()>);
     }
 
     /// Set onerror event handler
     pub fn set_onerror<F>(&mut self, callback: Option<F>)
     where
-        F: FnOnce() + 'static,
+        F: Fn() + 'static,
     {
         println!("XMLHttpRequest.onerror = [function]");
+        self.onerror = callback.map(|f| Box::new(f) as Box<dyn Fn()>);
     }
 
     /// Set onabort event handler
     pub fn set_onabort<F>(&mut self, callback: Option<F>)
     where
-        F: FnOnce() + 'static,
+        F: Fn() + 'static,
     {
         println!("XMLHttpRequest.onabort = [function]");
+        self.onabort = callback.map(|f| Box::new(f) as Box<dyn Fn()>);
     }
 
     /// Set onloadstart event handler
     pub fn set_onloadstart<F>(&mut self, callback: Option<F>)
     where
-        F: FnOnce() + 'static,
+        F: Fn() + 'static,
     {
         println!("XMLHttpRequest.onloadstart = [function]");
+        self.onloadstart = callback.map(|f| Box::new(f) as Box<dyn Fn()>);
     }
 
     /// Set onloadend event handler
     pub fn set_onloadend<F>(&mut self, callback: Option<F>)
     where
-        F: FnOnce() + 'static,
+        F: Fn() + 'static,
     {
         println!("XMLHttpRequest.onloadend = [function]");
+        self.onloadend = callback.map(|f| Box::new(f) as Box<dyn Fn()>);
     }
 
     /// Set onprogress event handler
     pub fn set_onprogress<F>(&mut self, callback: Option<F>)
     where
-        F: FnOnce() + 'static,
+        F: Fn() + 'static,
     {
         println!("XMLHttpRequest.onprogress = [function]");
+        self.onprogress = callback.map(|f| Box::new(f) as Box<dyn Fn()>);
     }
 
     /// Set ontimeout event handler
     pub fn set_ontimeout<F>(&mut self, callback: Option<F>)
     where
-        F: FnOnce() + 'static,
+        F: Fn() + 'static,
     {
         println!("XMLHttpRequest.ontimeout = [function]");
+        self.ontimeout = callback.map(|f| Box::new(f) as Box<dyn Fn()>);
     }
 
     // Alternative addEventListener method for more flexibility
-    pub fn addEventListener(&mut self, event_type: &str, listener: fn()) {
+    pub fn addEventListener<F>(&mut self, event_type: &str, listener: F)
+    where
+        F: Fn() + 'static,
+    {
         println!(
             "XMLHttpRequest.addEventListener({}, [function])",
             event_type
         );
 
+        let boxed_listener = Box::new(listener) as Box<dyn Fn()>;
+
         match event_type {
-            "readystatechange" => self.onreadystatechange = Some(listener),
-            "load" => self.onload = Some(listener),
-            "error" => self.onerror = Some(listener),
-            "abort" => self.onabort = Some(listener),
-            "loadstart" => self.onloadstart = Some(listener),
-            "loadend" => self.onloadend = Some(listener),
-            "progress" => self.onprogress = Some(listener),
-            "timeout" => self.ontimeout = Some(listener),
+            "readystatechange" => self.onreadystatechange = Some(boxed_listener),
+            "load" => self.onload = Some(boxed_listener),
+            "error" => self.onerror = Some(boxed_listener),
+            "abort" => self.onabort = Some(boxed_listener),
+            "loadstart" => self.onloadstart = Some(boxed_listener),
+            "loadend" => self.onloadend = Some(boxed_listener),
+            "progress" => self.onprogress = Some(boxed_listener),
+            "timeout" => self.ontimeout = Some(boxed_listener),
             _ => println!("Unknown event type: {}", event_type),
         }
     }
 
     /// Remove event listener
-    pub fn removeEventListener(&mut self, event_type: &str, _listener: fn()) {
+    pub fn removeEventListener(&mut self, event_type: &str) {
         println!("XMLHttpRequest.removeEventListener({})", event_type);
 
         match event_type {
@@ -1516,17 +1521,17 @@ impl XMLHttpRequest {
         self.statusText = "OK".to_string();
         self.responseURL = self.url.clone();
 
-        if let Some(callback) = self.onreadystatechange {
+        if let Some(ref callback) = self.onreadystatechange {
             callback();
         }
 
         // Simulate loading
         self.readyState = xhr_ready_state::LOADING;
-        if let Some(callback) = self.onreadystatechange {
+        if let Some(ref callback) = self.onreadystatechange {
             callback();
         }
 
-        if let Some(callback) = self.onprogress {
+        if let Some(ref callback) = self.onprogress {
             callback();
         }
 
@@ -1535,15 +1540,15 @@ impl XMLHttpRequest {
         self.response = r#"{"message": "Mock response", "status": "success"}"#.to_string();
         self.responseText = self.response.clone();
 
-        if let Some(callback) = self.onreadystatechange {
+        if let Some(ref callback) = self.onreadystatechange {
             callback();
         }
 
-        if let Some(callback) = self.onload {
+        if let Some(ref callback) = self.onload {
             callback();
         }
 
-        if let Some(callback) = self.onloadend {
+        if let Some(ref callback) = self.onloadend {
             callback();
         }
     }
@@ -1552,14 +1557,14 @@ impl XMLHttpRequest {
 // XMLHttpRequestUpload interface for upload progress tracking
 #[js_type]
 pub struct XMLHttpRequestUpload {
-    // Event handlers for upload events
-    onloadstart: Option<fn()>,
-    onload: Option<fn()>,
-    onloadend: Option<fn()>,
-    onprogress: Option<fn()>,
-    onerror: Option<fn()>,
-    onabort: Option<fn()>,
-    ontimeout: Option<fn()>,
+    // Event handlers for upload events using Box<dyn Fn()>
+    onloadstart: Option<Box<dyn Fn()>>,
+    onload: Option<Box<dyn Fn()>>,
+    onloadend: Option<Box<dyn Fn()>>,
+    onprogress: Option<Box<dyn Fn()>>,
+    onerror: Option<Box<dyn Fn()>>,
+    onabort: Option<Box<dyn Fn()>>,
+    ontimeout: Option<Box<dyn Fn()>>,
 }
 
 impl XMLHttpRequestUpload {
@@ -1575,25 +1580,30 @@ impl XMLHttpRequestUpload {
         }
     }
 
-    pub fn addEventListener(&mut self, event_type: &str, listener: fn()) {
+    pub fn addEventListener<F>(&mut self, event_type: &str, listener: F)
+    where
+        F: Fn() + 'static,
+    {
         println!(
             "XMLHttpRequestUpload.addEventListener({}, [function])",
             event_type
         );
 
+        let boxed_listener = Box::new(listener) as Box<dyn Fn()>;
+
         match event_type {
-            "loadstart" => self.onloadstart = Some(listener),
-            "load" => self.onload = Some(listener),
-            "loadend" => self.onloadend = Some(listener),
-            "progress" => self.onprogress = Some(listener),
-            "error" => self.onerror = Some(listener),
-            "abort" => self.onabort = Some(listener),
-            "timeout" => self.ontimeout = Some(listener),
+            "loadstart" => self.onloadstart = Some(boxed_listener),
+            "load" => self.onload = Some(boxed_listener),
+            "loadend" => self.onloadend = Some(boxed_listener),
+            "progress" => self.onprogress = Some(boxed_listener),
+            "error" => self.onerror = Some(boxed_listener),
+            "abort" => self.onabort = Some(boxed_listener),
+            "timeout" => self.ontimeout = Some(boxed_listener),
             _ => println!("Unknown upload event type: {}", event_type),
         }
     }
 
-    pub fn removeEventListener(&mut self, event_type: &str, _listener: fn()) {
+    pub fn removeEventListener(&mut self, event_type: &str) {
         println!("XMLHttpRequestUpload.removeEventListener({})", event_type);
 
         match event_type {
@@ -1642,7 +1652,7 @@ impl Default for XMLHttpRequest {
 }
 
 #[cfg(test)]
-mod tests_xhr {
+mod tests {
     use super::*;
 
     #[test]
@@ -1672,19 +1682,17 @@ mod tests_xhr {
         assert!(!xhr.responseText.is_empty());
     }
 
-    /* FAILS
-        #[test]
-        fn test_xhr_abort() {
-            let mut xhr = XMLHttpRequest::new();
-            xhr.open("POST", "https://api.example.com/upload");
-            xhr.send_with_body(Some(r#"{"data": "test"}"#));
+    #[test]
+    fn test_xhr_abort() {
+        let mut xhr = XMLHttpRequest::new();
+        xhr.open("POST", "https://api.example.com/upload");
+        xhr.send_with_body(Some(r#"{"data": "test"}"#));
 
-            // Abort the request
-            xhr.abort();
-            assert_eq!(xhr.readyState, xhr_ready_state::DONE);
-            assert_eq!(xhr.status, 0);
-        }
-    */
+        // Abort the request
+        xhr.abort();
+        assert_eq!(xhr.readyState, xhr_ready_state::DONE);
+        assert_eq!(xhr.status, 0);
+    }
 
     #[test]
     fn test_xhr_headers() {
