@@ -336,13 +336,29 @@ impl Window {
         println!("PROMPT: {} (default: {:?})", message, _default_value);
         Some("mock input".to_string())
     }
+    /*
+        pub fn setTimeout(&self, _callback: fn(), delay: u32) -> u32 {
+            println!("SET_TIMEOUT: callback scheduled for {}ms", delay);
+            1 // Mock timer ID
+        }
 
-    pub fn setTimeout(&self, _callback: fn(), delay: u32) -> u32 {
+        pub fn setInterval(&self, _callback: fn(), delay: u32) -> u32 {
+            println!("SET_INTERVAL: callback scheduled every {}ms", delay);
+            1 // Mock timer ID
+        }
+    */
+    pub fn setTimeout<F>(&self, callback: F, delay: u32) -> u32
+    where
+        F: FnOnce() + 'static,
+    {
         println!("SET_TIMEOUT: callback scheduled for {}ms", delay);
         1 // Mock timer ID
     }
 
-    pub fn setInterval(&self, _callback: fn(), delay: u32) -> u32 {
+    pub fn setInterval<F>(&self, callback: F, delay: u32) -> u32
+    where
+        F: Fn() + 'static, // Note: Fn (not FnOnce) since intervals can fire multiple times
+    {
         println!("SET_INTERVAL: callback scheduled every {}ms", delay);
         1 // Mock timer ID
     }
@@ -776,12 +792,27 @@ pub fn confirm(message: &str) -> bool {
 pub fn prompt(message: &str) -> Option<String> {
     window.prompt(message, None)
 }
-
+/*
 pub fn setTimeout(callback: fn(), delay: u32) -> u32 {
     window.setTimeout(callback, delay)
 }
 
 pub fn setInterval(callback: fn(), delay: u32) -> u32 {
+    window.setInterval(callback, delay)
+}
+*/
+
+pub fn setTimeout<F>(callback: F, delay: u32) -> u32
+where
+    F: FnOnce() + 'static,
+{
+    window.setTimeout(callback, delay)
+}
+
+pub fn setInterval<F>(callback: F, delay: u32) -> u32
+where
+    F: Fn() + 'static, // Note: Fn (not FnOnce) since intervals can fire multiple times
+{
     window.setInterval(callback, delay)
 }
 
