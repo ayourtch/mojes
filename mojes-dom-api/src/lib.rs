@@ -90,6 +90,10 @@ impl Element {
         // Mock implementation for transpilation
     }
 
+    pub fn insertAdjacentHTML(&mut self, _position: &str, _text: &str) {
+        // Mock implementation for transpilation
+    }
+
     pub fn cloneNode(&self, _deep: bool) -> Element {
         self.clone()
     }
