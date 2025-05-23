@@ -714,9 +714,9 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
 
             // Generate JavaScript arrow function
             if params.len() == 1 {
-                format!("{} => {}", params[0], body_js)
+                format!("{} => {} /* Xclosure */", params[0], body_js)
             } else {
-                format!("({}) => {}", params.join(", "), body_js)
+                format!("({}) => {} /* XXclosure */", params.join(", "), body_js)
             }
         }
 

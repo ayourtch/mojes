@@ -21,8 +21,6 @@ pub fn impl_to_js(_attr: TokenStream, item: TokenStream) -> TokenStream {
         #input_impl
 
         static TEST: &str = #js_debug;
-
-
     };
 
     output.into()
@@ -104,15 +102,13 @@ pub fn to_js(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // Create a string constant with the JavaScript function
     let js_const_name = format_ident!("{}_JS", fn_name.to_string().to_uppercase());
 
-    // Generate the output
+    // Generate the output with proper distributed_slice syntax
     let output = quote! {
         #input_fn
 
-       #[distributed_slice(JS)]
+        #[linkme::distributed_slice(crate::JS)]
         static #js_const_name: &str = #js_function;
-
     };
-    // const #js_const_name: &str = #js_function;
 
     output.into()
 }
@@ -132,7 +128,8 @@ pub fn js_type(_attr: TokenStream, item: TokenStream) -> TokenStream {
         let output = quote! {
             #input_struct
 
-            const #js_const_name: &str = #js_class;
+            #[linkme::distributed_slice(crate::JS)]
+            static #js_const_name: &str = #js_class;
         };
 
         return output.into();
@@ -148,7 +145,8 @@ pub fn js_type(_attr: TokenStream, item: TokenStream) -> TokenStream {
         let output = quote! {
             #input_enum
 
-            const #js_const_name: &str = #js_enum;
+            #[linkme::distributed_slice(crate::JS)]
+            static #js_const_name: &str = #js_enum;
         };
 
         return output.into();

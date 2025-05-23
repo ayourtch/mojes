@@ -1,0 +1,13 @@
+[package]
+name = "mojes"
+version = "0.1.0"
+edition = "2024"
+description = "Rust to JavaScript Transpiler"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ayourtch/mojes"
+
+[dependencies]
+mojes-derive = { path = "../mojes-derive" }
+mojes-mojo = { path = "../mojes-mojo" }
+mojes-dom-api = { path = "../mojes-dom-api" }
+linkme = "0.3"
