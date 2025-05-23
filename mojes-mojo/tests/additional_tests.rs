@@ -474,6 +474,7 @@ fn test_loop_with_break_continue() {
     };
 
     let js_code = rust_block_to_js(&block);
+    println!("DEBUG test_loop_with_break_continue js code: {}", &js_code);
     let result = eval_block_as_function(&js_code).unwrap();
     assert_eq!(result.as_number().unwrap(), 12.0); // 1+2+4+5
 }

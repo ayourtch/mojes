@@ -499,21 +499,62 @@ fn handle_while_expr(expr: &syn::ExprWhile) -> String {
 }
 
 // Handle for loops
+// Handle for loops
 fn handle_for_expr(expr: &syn::ExprForLoop) -> String {
-    // Extract the loop variable
+    // Check if this is an enumerate pattern: for (i, item) in collection.iter().enumerate()
+    if let (Pat::Tuple(tuple_pat), Some(enumerate_info)) = (&*expr.pat, detect_enumerate_pattern(&expr.expr)) {
+        // This is a for (i, item) in collection.iter().enumerate() pattern
+        if tuple_pat.elems.len() == 2 {
+            let index_var = if let Pat::Ident(ref pat_ident) = tuple_pat.elems[0] {
+                pat_ident.ident.to_string()
+            } else {
+                "i".to_string()
+            };
+            
+            let item_var = if let Pat::Ident(ref pat_ident) = tuple_pat.elems[1] {
+                pat_ident.ident.to_string()
+            } else {
+                "item".to_string()
+            };
+
+            let iterable_js = enumerate_info.collection;
+            let body_js = rust_block_to_js(&expr.body);
+
+            let trimmed_body = body_js
+                .lines()
+                .map(|line| {
+                    if line.starts_with("  ") {
+                        line[2..].to_string()
+                    } else {
+                        line.to_string()
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join("\n");
+
+ return format!(
+    "let {} = -1;\nfor (const {} of {}) {{\n{}++; {}\n}}",
+    index_var, item_var, iterable_js, index_var, trimmed_body
+);
+
+            // Wrap in Array.from() to handle NodeLists
+            return format!(
+                "for (const [{}, {}] of Array.from({}).map((item, index) => [index, item])) {{\n{}\n}}",
+                index_var, item_var, iterable_js, trimmed_body
+            );
+        }
+    }
+    // Handle regular iteration patterns
     let var_name = if let Pat::Ident(pat_ident) = &*expr.pat {
         pat_ident.ident.to_string()
     } else {
-        "item".to_string() // Fallback variable name
+        "item".to_string()
     };
 
-    // Convert the iterable expression
-    let iterable_js = rust_expr_to_js(&expr.expr);
-
-    // Convert the loop body
+    // Convert the iterable expression, handling .iter() method calls
+    let iterable_js = convert_iterable_expr(&expr.expr);
     let body_js = rust_block_to_js(&expr.body);
 
-    // Remove starting spaces from each line in body_js
     let trimmed_body = body_js
         .lines()
         .map(|line| {
@@ -525,13 +566,57 @@ fn handle_for_expr(expr: &syn::ExprForLoop) -> String {
         })
         .collect::<Vec<String>>()
         .join("\n");
-    // wrap the body into a function
-    let trimmed_body = format!("(function() {{\n{}}})();", trimmed_body);
 
     format!(
-        "for (const {} of {}) {{\n{}}}",
+        "for (const {} of {}) {{\n{}\n}}",
         var_name, iterable_js, trimmed_body
     )
+}
+
+// Helper function to detect enumerate patterns
+struct EnumerateInfo {
+    collection: String,
+}
+
+fn detect_enumerate_pattern(expr: &Expr) -> Option<EnumerateInfo> {
+    if let Expr::MethodCall(method_call) = expr {
+        if method_call.method == "enumerate" {
+            // Check if the receiver is a .iter() call
+            if let Expr::MethodCall(iter_call) = &*method_call.receiver {
+                if iter_call.method == "iter" {
+                    let collection = rust_expr_to_js(&iter_call.receiver);
+                    return Some(EnumerateInfo { collection });
+                }
+            }
+        }
+    }
+    None
+}
+
+// Helper function to convert iterable expressions
+fn convert_iterable_expr(expr: &Expr) -> String {
+    match expr {
+        Expr::MethodCall(method_call) => {
+            let receiver = rust_expr_to_js(&method_call.receiver);
+            let method_name = method_call.method.to_string();
+
+            match method_name.as_str() {
+                "iter" => {
+                    // .iter() in JavaScript is just the array itself
+                    receiver
+                }
+                "enumerate" => {
+                    format!("{}.map((item, index) => [index, item])", receiver)
+                    // format!( "let {} = 0;\nfor (const {} of {}) {{\n{}\n  {}++;\n}}", index_var, item_var, iterable_js, trimmed_body, index_var)
+                }
+                _ => {
+                    // Other method calls, convert normally
+                    rust_expr_to_js(expr)
+                }
+            }
+        }
+        _ => rust_expr_to_js(expr)
+    }
 }
 
 // Update rust_block_to_js to handle loops
