@@ -40,6 +40,29 @@ mod js_object_tests {
         value.to_boolean()
     }
 
+    fn js_class_person() -> String {
+        r#"
+class Person {
+  constructor(name, age) {
+    this.name = name;
+    this.age = age;
+  }
+
+  toJSON() {
+    return {
+      name: this.name,
+      age: this.age,
+    };
+  }
+
+  static fromJSON(json) {
+    return new Person(json.name, json.age);
+  }
+}
+"#
+        .to_string()
+    }
+
     // ==================== 1. BASIC js_object MACRO TESTS ====================
 
     #[test]
@@ -62,6 +85,7 @@ mod js_object_tests {
 
         let js_methods = generate_js_methods_for_impl(&impl_block);
         println!("Generated methods:\n{}", js_methods);
+        let js_person = js_class_person();
 
         // Should contain static method
         assert!(js_methods.contains("Person.new = function"));
@@ -69,9 +93,11 @@ mod js_object_tests {
         // Should contain instance methods
         assert!(js_methods.contains("Person.prototype.greet = function"));
         assert!(js_methods.contains("Person.prototype.get_age = function"));
+        let js_code = format!("{}\n{}\n", &js_person, &js_methods);
 
-        // Should be valid JavaScript
-        assert!(is_valid_js(&js_methods));
+        // Should be valid JavaScript - need to have it with class though
+        eval_js(&js_code).unwrap();
+        assert!(is_valid_js(&js_code));
     }
 
     #[test]
