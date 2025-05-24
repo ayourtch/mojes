@@ -7,6 +7,8 @@ use mojes_mojo::format_rust_type;
 use mojes_mojo::generate_js_class_for_struct;
 use mojes_mojo::generate_js_enum;
 use mojes_mojo::rust_block_to_js;
+use mojes_mojo::generate_js_methods_for_impl; 
+
 
 #[proc_macro_attribute]
 pub fn impl_to_js(_attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -159,4 +161,40 @@ pub fn js_type(_attr: TokenStream, item: TokenStream) -> TokenStream {
     );
 
     error.to_compile_error().into()
+}
+
+#[proc_macro_attribute]
+pub fn js_object(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input_impl = parse_macro_input!(item as ItemImpl);
+    
+    // Get the struct name from the impl block
+    let struct_name = if let syn::Type::Path(type_path) = &*input_impl.self_ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            segment.ident.to_string()
+        } else {
+            return syn::Error::new_spanned(
+                &input_impl.self_ty,
+                "Could not determine struct name from impl block"
+            ).to_compile_error().into();
+        }
+    } else {
+        return syn::Error::new_spanned(
+            &input_impl.self_ty,
+            "js_object can only be applied to impl blocks for named types"
+        ).to_compile_error().into();
+    };
+
+    // Generate JavaScript methods for the impl block
+    let js_methods = generate_js_methods_for_impl(&input_impl);
+
+    let js_const_name = format_ident!("{}_JS_METHODS", struct_name.to_uppercase());
+
+    let output = quote! {
+        #input_impl
+
+        #[linkme::distributed_slice(crate::JS)]
+        static #js_const_name: &str = #js_methods;
+    };
+
+    output.into()
 }

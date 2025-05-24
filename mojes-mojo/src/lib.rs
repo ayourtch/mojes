@@ -2,6 +2,86 @@ use syn::punctuated::Punctuated;
 use syn::token::Comma;
 use syn::{Block, Expr, Fields, ItemEnum, ItemStruct, Pat, Stmt, Type};
 
+
+use syn::{ItemImpl, ImplItem, Signature, FnArg, ReturnType};
+
+/// Generate JavaScript methods for a Rust impl block
+pub fn generate_js_methods_for_impl(input_impl: &ItemImpl) -> String {
+    let struct_name = if let syn::Type::Path(type_path) = &*input_impl.self_ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            segment.ident.to_string()
+        } else {
+            return "/* Could not determine struct name */".to_string();
+        }
+    } else {
+        return "/* Invalid impl type */".to_string();
+    };
+
+    let mut js_methods = String::new();
+    
+    // Add methods to the prototype
+    js_methods.push_str(&format!("// Methods for {}\n", struct_name));
+    
+    for item in &input_impl.items {
+        if let ImplItem::Fn(method) = item {
+            let method_js = generate_js_method(&struct_name, method);
+            js_methods.push_str(&method_js);
+            js_methods.push_str("\n\n");
+        }
+    }
+    
+    js_methods
+}
+
+/// Generate JavaScript method for a single Rust method
+fn generate_js_method(struct_name: &str, method: &syn::ImplItemFn) -> String {
+    let method_name = method.sig.ident.to_string();
+    let sig = &method.sig;
+    
+    // Check if this is a static method (no self parameter)
+    let is_static = !sig.inputs.iter().any(|arg| {
+        matches!(arg, FnArg::Receiver(_))
+    });
+    
+    // Extract non-self parameters
+    let params: Vec<String> = sig.inputs.iter().filter_map(|arg| {
+        match arg {
+            FnArg::Receiver(_) => None, // Skip self
+            FnArg::Typed(pat_type) => {
+                if let Pat::Ident(pat_ident) = &*pat_type.pat {
+                    Some(pat_ident.ident.to_string())
+                } else {
+                    None
+                }
+            }
+        }
+    }).collect();
+    
+    // Convert method body to JavaScript
+    let body_js = rust_block_to_js(&method.block);
+    
+    // Generate appropriate JavaScript method
+    if is_static {
+        // Static method
+        format!(
+            "{}.{} = function({}) {{\n{}}};",
+            struct_name,
+            method_name,
+            params.join(", "),
+            body_js
+        )
+    } else {
+        // Instance method
+        format!(
+            "{}.prototype.{} = function({}) {{\n{}}};",
+            struct_name,
+            method_name,
+            params.join(", "),
+            body_js
+        )
+    }
+}
+
 // Handle binary operations
 fn handle_binary_op(bin: &syn::ExprBinary) -> String {
     let left = rust_expr_to_js(&bin.left);
