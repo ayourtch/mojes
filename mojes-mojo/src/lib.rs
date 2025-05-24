@@ -289,11 +289,26 @@ fn handle_format_like_macro(token_string: &str) -> String {
     }
     eprintln!("DEBUG format_str: '{}'", format_str);
 
-    // Get format arguments
+    // Get format arguments and process them through the Rust->JS converter
     let format_args: Vec<String> = parts
         .iter()
         .skip(1)
-        .map(|arg| arg.trim().to_string())
+        .map(|arg| {
+            let trimmed_arg = arg.trim();
+            // Parse the argument as a Rust expression and convert it
+            if let Ok(parsed_expr) = syn::parse_str::<syn::Expr>(trimmed_arg) {
+                rust_expr_to_js(&parsed_expr)
+            } else {
+                // If parsing fails, use the original but do basic self->this replacement
+                if trimmed_arg.starts_with("self.") {
+                    trimmed_arg.replacen("self.", "this.", 1)
+                } else if trimmed_arg == "self" {
+                    "this".to_string()
+                } else {
+                    trimmed_arg.to_string()
+                }
+            }
+        })
         .collect();
     eprintln!("DEBUG format_args: {:?}", format_args);
 
