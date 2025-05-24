@@ -734,7 +734,6 @@ fn test_comprehensive_integration() {
     };
 
     let js_code = rust_block_to_js(&block);
-    println!("DEBUG test_comprehensive_integration js code: {}", &js_code);
 
     // Test that the generated code has all the expected parts
     assert!(js_code.contains("const person = { name:"));
