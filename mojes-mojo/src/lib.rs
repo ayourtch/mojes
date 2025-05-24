@@ -569,7 +569,7 @@ fn handle_if_let(expr: &syn::ExprIf) -> Option<String> {
                                 }
                             }
 
-                            js.push_str("\n  return undefined;\n})()");
+                            js.push_str("\n  return undefined;\n}).call(this)");
                             return Some(js);
                         }
                     }
@@ -601,7 +601,7 @@ fn handle_while_expr(expr: &syn::ExprWhile) -> String {
         .join("\n");
 
     // wrap the body into a function
-    let trimmed_body = format!("(function() {{\n{}}})();", trimmed_body);
+    let trimmed_body = format!("(function() {{\n{}}}).call(this);", trimmed_body);
 
     format!("while ({}) {{\n{}}}", cond_js, trimmed_body)
 }
@@ -871,6 +871,15 @@ pub fn rust_block_to_js(block: &Block) -> String {
     js_code
 }
 
+fn get_closure_param_name(param: &syn::Pat) -> Option<String> {
+    eprintln!("PARAM: {:?}", &param);
+    match param {
+        syn::Pat::Ident(pat_ident) => Some(pat_ident.ident.to_string()),
+        syn::Pat::Reference(pat_ref) => get_closure_param_name(&pat_ref.pat),
+        _ => None,
+    }
+}
+
 // The main function for converting Rust expressions to JavaScript
 pub fn rust_expr_to_js(expr: &Expr) -> String {
     if let Some(result) = update_rust_expr_to_js_for_macros(expr) {
@@ -920,14 +929,9 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
             let params: Vec<String> = closure
                 .inputs
                 .iter()
-                .filter_map(|param| {
-                    if let syn::Pat::Ident(pat_ident) = param {
-                        Some(pat_ident.ident.to_string())
-                    } else {
-                        None
-                    }
-                })
+                .filter_map(|param| get_closure_param_name(&param))
                 .collect();
+            eprintln!("CLOSURE DEBUG {:#?} params: {:?}", &closure, &params);
             // Handle closure body specially
             let body_js = match &*closure.body {
                 // If the closure body is a block, handle it directly without IIFE wrapping
@@ -1044,7 +1048,7 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
         Expr::Block(block_expr) => {
             // Handle nested blocks
             let block_js = rust_block_to_js(&block_expr.block);
-            format!("(function() {{\n{}}})();", block_js)
+            format!("(function() {{\n{}}}).call(this);", block_js)
         }
 
         // Handle if-let expressions
@@ -1085,7 +1089,7 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
                 }
             }
 
-            if_js.push_str("\n  return undefined;\n})()");
+            if_js.push_str("\n  return undefined;\n}).call(this)");
             if_js
         }
 
@@ -1204,6 +1208,10 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
                             // Special case: .len() becomes .length (property, not method)
                             return format!("{}.length", js_receiver);
                         }
+                        "count" => {
+                            // Special case: .count() becomes .length (property, not method)
+                            return format!("{}.length", js_receiver);
+                        }
                         "clone" => {
                             // Special case, use shallow copy
                             return format!("{}", js_receiver);
@@ -1295,6 +1303,10 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
             let js_method = match method_name.as_str() {
                 "len" => {
                     // Special case: .len() becomes .length (property, not method)
+                    return format!("{}.length", receiver);
+                }
+                "count" => {
+                    // Special case: .count() becomes .length (property, not method)
                     return format!("{}.length", receiver);
                 }
                 "clone" => {

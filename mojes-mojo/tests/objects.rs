@@ -511,7 +511,6 @@ class Person {
     }
 
     // ==================== 5. COMPLEX SELF REFERENCE PATTERNS ====================
-
     #[test]
     fn test_complex_self_patterns() {
         let impl_block: ItemImpl = parse_quote! {
@@ -919,7 +918,10 @@ class Person {
             "#,
             struct_js, methods_js
         );
-
+        println!(
+            "DEBUG test_initial_progress js code: {}",
+            &test_initial_progress
+        );
         let (result, mut ctx) = eval_js_with_context(&test_initial_progress).unwrap();
         assert_eq!(js_to_number(&result, &mut ctx), 0.0);
 
@@ -1313,7 +1315,7 @@ class Person {
         assert!(this_count > 0, "Should have some this references");
 
         // Should be valid JavaScript - but need the class
-        let js_code = format!("class TestClass {{ }}\n {}\n",  &methods_js);
+        let js_code = format!("class TestClass {{ }}\n {}\n", &methods_js);
         eval_js(&js_code).unwrap();
         assert!(is_valid_js(&js_code));
     }
