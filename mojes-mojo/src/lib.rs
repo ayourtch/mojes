@@ -871,6 +871,42 @@ pub fn rust_block_to_js(block: &Block) -> String {
     js_code
 }
 
+fn flatten_if_chain(if_expr: &syn::ExprIf) -> Vec<(String, String)> {
+    let mut conditions_and_blocks = Vec::new();
+
+    // Add the main if condition and block
+    let cond_js = rust_expr_to_js(&if_expr.cond);
+    let then_js = rust_block_to_js(&if_expr.then_branch);
+    eprintln!("DBG flatten_if_chain 1: {} | {}", &cond_js, &then_js);
+    conditions_and_blocks.push((cond_js, then_js));
+
+    // Process else branch
+    if let Some((_, else_branch)) = &if_expr.else_branch {
+        match &**else_branch {
+            Expr::If(else_if_expr) => {
+                // Recursively flatten else-if
+                let mut nested = flatten_if_chain(else_if_expr);
+                conditions_and_blocks.append(&mut nested);
+            }
+            Expr::Block(else_block) => {
+                // Final else block
+                let else_js = rust_block_to_js(&else_block.block);
+                eprintln!("DBG flatten_if_chain final else: {} | {}", true, &else_js);
+                conditions_and_blocks.push(("true".to_string(), else_js)); // Final else
+            }
+            _ => {
+                // Single expression else
+                let else_js = rust_expr_to_js(else_branch);
+                eprintln!("DBG flatten_if_chain single-expr: {} | {}", true, &else_js);
+                conditions_and_blocks
+                    .push(("true".to_string(), format!("  return {};\n", else_js)));
+            }
+        }
+    }
+
+    conditions_and_blocks
+}
+
 // The main function for converting Rust expressions to JavaScript
 pub fn rust_expr_to_js(expr: &Expr) -> String {
     if let Some(result) = update_rust_expr_to_js_for_macros(expr) {
@@ -1054,34 +1090,77 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
                 return if_let_js;
             }
 
-            // Regular if expression
             let cond_js = rust_expr_to_js(&if_expr.cond);
-            let then_js = rust_block_to_js(&if_expr.then_branch);
-            let mut if_js = format!(
-                "(function() {{\n  if ({}) {{\n{}",
-                cond_js,
-                indent_lines(&then_js, 4)
-            );
 
-            if_js.push_str("  }");
-
-            // Handle else branch
-            if let Some((_, else_branch)) = &if_expr.else_branch {
+            // Try to convert simple if-else to ternary operator first
+            let then_simple = if_expr.then_branch.stmts.len() == 1;
+            let else_simple = if let Some((_, else_branch)) = &if_expr.else_branch {
                 match &**else_branch {
-                    Expr::Block(else_block) => {
-                        let else_js = rust_block_to_js(&else_block.block);
-                        if_js.push_str(&format!(" else {{\n{}", indent_lines(&else_js, 4)));
-                        if_js.push_str("  }");
+                    Expr::Block(block) => block.block.stmts.len() == 1,
+                    Expr::If(_) => false, // else-if is not simple
+                    _ => true,
+                }
+            } else {
+                true // no else is simple
+            };
+
+            if then_simple && else_simple {
+                // Extract then expression
+                let then_expr =
+                    if let Some(syn::Stmt::Expr(expr, _)) = if_expr.then_branch.stmts.first() {
+                        rust_expr_to_js(expr)
+                    } else {
+                        "undefined".to_string()
+                    };
+
+                // Extract else expression
+                let else_expr = if let Some((_, else_branch)) = &if_expr.else_branch {
+                    match &**else_branch {
+                        Expr::Block(else_block) => {
+                            if let Some(syn::Stmt::Expr(expr, _)) = else_block.block.stmts.first() {
+                                rust_expr_to_js(expr)
+                            } else {
+                                "undefined".to_string()
+                            }
+                        }
+                        _ => rust_expr_to_js(else_branch),
                     }
-                    Expr::If(_) => {
-                        // Handle else if
-                        let else_if_js = rust_expr_to_js(else_branch);
-                        if_js.push_str(&format!(" else {}", else_if_js));
-                    }
-                    _ => {
-                        let else_js = rust_expr_to_js(else_branch);
-                        if_js.push_str(&format!(" else {{\n    return {};\n  }}", else_js));
-                    }
+                } else {
+                    "undefined".to_string()
+                };
+
+                // Use ternary operator for simple cases
+                return format!("({} ? {} : {})", cond_js, then_expr, else_expr);
+            }
+
+            panic!("XXXX");
+
+            // For complex cases with potential else-if chains, flatten them
+            let conditions_and_blocks = flatten_if_chain(if_expr);
+
+            let mut if_js = String::from("(function() {\n");
+
+            for (i, (condition, block)) in conditions_and_blocks.iter().enumerate() {
+                if i == 0 {
+                    // First condition (main if)
+                    if_js.push_str(&format!(
+                        "  if ({}) {{\n{}",
+                        condition,
+                        indent_lines(block, 4)
+                    ));
+                    if_js.push_str("  }");
+                } else if condition == "true" {
+                    // Final else block
+                    if_js.push_str(&format!(" else {{\n{}", indent_lines(block, 4)));
+                    if_js.push_str("  }");
+                } else {
+                    // else if condition
+                    if_js.push_str(&format!(
+                        " else if ({}) {{\n{}",
+                        condition,
+                        indent_lines(block, 4)
+                    ));
+                    if_js.push_str("  }");
                 }
             }
 
@@ -1543,13 +1622,13 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
                             let var_name = pat_ident.ident.to_string();
                             if i == 0 {
                                 format!(
-                                    "  {{ // Binding to {}\n    const {} = _match_value;\n",
-                                    var_name, var_name
+                                    "  {{ // Binding to {}: {:?}\n    const {} = _match_value;\n",
+                                    var_name, &arm, var_name
                                 )
                             } else {
                                 format!(
-                                    "  else {{ // Binding to {}\n    const {} = _match_value;\n",
-                                    var_name, var_name
+                                    "  else {{ // Binding to {}:: {:?}\n    const {} = _match_value;\n",
+                                    var_name, &arm, var_name
                                 )
                             }
                         }
