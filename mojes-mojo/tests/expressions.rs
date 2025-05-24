@@ -360,9 +360,10 @@ fn test_field_access_expressions() {
 fn test_struct_instantiation() {
     let expr: Expr = parse_quote!(Point { x: 10, y: 20 });
     let result = rust_expr_to_js(&expr);
-    assert!(result.contains("x: 10"));
-    assert!(result.contains("y: 20"));
-    assert!(result.starts_with("{") && result.ends_with("}"));
+    println!("DEBUG test_struct_instantiation js code: {}", &result);
+    assert!(result.contains("10"));
+    assert!(result.contains("20"));
+    assert!(result.starts_with("new Point(") && result.ends_with(")"));
 }
 
 #[test]

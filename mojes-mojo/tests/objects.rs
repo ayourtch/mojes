@@ -436,6 +436,10 @@ class Person {
             "#,
             struct_js, methods_js
         );
+        println!(
+            "DEBUG test_static_vs_instance_methods test_static_new: {}",
+            &test_static_new
+        );
 
         let (result, mut ctx) = eval_js_with_context(&test_static_new).unwrap();
         assert_eq!(js_to_string(&result, &mut ctx), "Alice");
@@ -465,6 +469,10 @@ class Person {
             person.greet();
             "#,
             struct_js, methods_js
+        );
+        println!(
+            "DEBUG test_static_vs_instance_methods test_instance_greet: {}",
+            test_instance_greet
         );
 
         let (result, mut ctx) = eval_js_with_context(&test_instance_greet).unwrap();

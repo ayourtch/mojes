@@ -1640,6 +1640,13 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
         // Handle struct instantiation as JS object
         Expr::Struct(struct_expr) => {
             let mut fields = Vec::new();
+            let path = &struct_expr.path;
+            let struct_name = if let Some(ident) = path.get_ident() {
+                ident.to_string()
+            } else {
+                // Handle complex paths like module::StructName
+                path.segments.last().unwrap().ident.to_string()
+            };
 
             for field in &struct_expr.fields {
                 let field_name = match &field.member {
@@ -1647,10 +1654,13 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
                     syn::Member::Unnamed(index) => format!("_{}", index.index),
                 };
                 let field_value = rust_expr_to_js(&field.expr);
-                fields.push(format!("{}: {}", field_name, field_value));
+                // fields.push(format!("{}: {}", field_name, field_value));
+                fields.push(format!("{}", field_value));
             }
 
-            format!("{{ {} }}", fields.join(", "))
+            //  WAS:
+            //  format!("{{ {} }}", fields.join(", "))
+            format!("new {}({})", struct_name, fields.join(", "))
         }
 
         // For any other unhandled expression
