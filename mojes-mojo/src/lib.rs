@@ -33,6 +33,16 @@ pub fn generate_js_methods_for_impl(input_impl: &ItemImpl) -> String {
     js_methods
 }
 
+// Add this new function to mojes-mojo/src/lib.rs
+// Insert before the generate_js_methods_for_impl function
+
+/// Convert method body to JavaScript with proper self -> this conversion
+fn rust_method_body_to_js(block: &syn::Block) -> String {
+    // We can reuse rust_block_to_js since we've updated rust_expr_to_js 
+    // to handle self -> this conversion at the expression level
+    rust_block_to_js(block)
+}
+
 /// Generate JavaScript method for a single Rust method
 fn generate_js_method(struct_name: &str, method: &syn::ImplItemFn) -> String {
     let method_name = method.sig.ident.to_string();
@@ -57,8 +67,8 @@ fn generate_js_method(struct_name: &str, method: &syn::ImplItemFn) -> String {
         }
     }).collect();
     
-    // Convert method body to JavaScript
-    let body_js = rust_block_to_js(&method.block);
+    // Convert method body to JavaScript with self
+    let body_js = rust_method_body_to_js(&method.block);
     
     // Generate appropriate JavaScript method
     if is_static {
@@ -81,7 +91,6 @@ fn generate_js_method(struct_name: &str, method: &syn::ImplItemFn) -> String {
         )
     }
 }
-
 // Handle binary operations
 fn handle_binary_op(bin: &syn::ExprBinary) -> String {
     let left = rust_expr_to_js(&bin.left);
@@ -1312,6 +1321,11 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
             if let Some(last_segment) = path.path.segments.last() {
                 let ident_str = last_segment.ident.to_string();
 
+                // Special case for self -> this conversion
+                if ident_str == "self" {
+                    return "this".to_string();
+                }
+
                 // Special case for common Rust constants
                 match last_segment.ident.to_string().as_str() {
                     "None" => "null".to_string(),
@@ -1510,7 +1524,12 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
                 syn::Member::Unnamed(index) => index.index.to_string(),
             };
 
-            format!("{}.{}", base, member)
+            // Special handling for self.field -> this.field
+            if base == "this" {
+                format!("this.{}", member)
+            } else {
+                format!("{}.{}", base, member)
+            }
         }
 
         // Handle struct instantiation as JS object
