@@ -7,11 +7,17 @@ use mojes_derive::js_type;
 #[linkme::distributed_slice]
 pub static JS: [&str];
 
+pub fn Number(s: &str) -> f64 {
+    0.0
+}
+
 // Core DOM Element representation
-#[js_type]
+// #[js_type]
 #[derive(Clone, Debug)]
 pub struct Element {
     pub id: String,
+    // for inputs
+    pub name: String,
     pub tagName: String,
     pub className: String,
     pub innerHTML: String,
@@ -25,6 +31,7 @@ impl Element {
     pub const fn new(_tag_name: &str) -> Self {
         Self {
             id: String::new(),
+            name: String::new(),
             tagName: String::new(), // We'll set this separately since we can't call to_string() in const
             className: String::new(),
             innerHTML: String::new(),
@@ -38,6 +45,7 @@ impl Element {
     pub fn with_tag_name(tag_name: &str) -> Self {
         Self {
             id: String::new(),
+            name: String::new(),
             tagName: tag_name.to_string(),
             className: String::new(),
             innerHTML: String::new(),
@@ -166,6 +174,9 @@ impl Document {
 
     pub fn getElementsByTagName(&self, tag_name: &str) -> Vec<Element> {
         vec![Element::with_tag_name(tag_name)]
+    }
+    pub fn getElementsByName(&self, name: &str) -> Vec<Element> {
+        vec![]
     }
 
     pub fn getElementsByClassName(&self, _class_name: &str) -> Vec<Element> {

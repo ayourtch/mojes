@@ -931,7 +931,7 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
                 .iter()
                 .filter_map(|param| get_closure_param_name(&param))
                 .collect();
-            eprintln!("CLOSURE DEBUG {:#?} params: {:?}", &closure, &params);
+            eprintln!("CLOSURE DEBUG {:?} params: {:?}", &closure, &params);
             // Handle closure body specially
             let body_js = match &*closure.body {
                 // If the closure body is a block, handle it directly without IIFE wrapping
