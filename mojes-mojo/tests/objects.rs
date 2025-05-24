@@ -130,8 +130,10 @@ class Person {
         assert!(js_methods.contains("this.name"));
         assert!(js_methods.contains("this.age"));
 
+        let js_code = format!("{}\n{}\n", js_class_person(), &js_methods);
+
         // Should be valid JavaScript
-        assert!(is_valid_js(&js_methods));
+        assert!(is_valid_js(&js_code));
     }
 
     // ==================== 2. FUNCTIONAL TESTING WITH BOA ====================
@@ -743,6 +745,7 @@ class Person {
 
         let test_add = format!(
             r#"
+            class Utility {{ }}
             {}
             
             Utility.add(5, 3);
@@ -752,9 +755,11 @@ class Person {
 
         let (result, mut ctx) = eval_js_with_context(&test_add).unwrap();
         assert_eq!(js_to_number(&result, &mut ctx), 8.0);
+        println!("ADD result: {:?}", &ctx);
 
         let test_multiply = format!(
             r#"
+            class Utility {{ }}
             {}
             
             Utility.multiply(4.5, 2.0);
@@ -807,7 +812,9 @@ class Person {
         assert!(methods_js.contains("this.field"));
 
         // Should be valid JavaScript
-        assert!(is_valid_js(&methods_js));
+        let js_code = format!("class LargeStruct {{ }} \n {}", &methods_js);
+        eval_js(&js_code).unwrap();
+        assert!(is_valid_js(&js_code));
 
         // Performance should be reasonable (less than 100ms for this size)
         assert!(duration.as_millis() < 100);
@@ -1177,8 +1184,9 @@ class Person {
         assert!(methods_js.contains("this.age"));
         assert!(methods_js.contains("this.active"));
 
-        // Should be valid JavaScript
-        assert!(is_valid_js(&methods_js));
+        // Should be valid JavaScript - but need a class
+        let js_code = format!("class ComplexStruct {{ }}\n{}\n", &methods_js);
+        eval_js(&js_code).unwrap();
 
         // Test with a struct for execution
         let struct_js = generate_js_class_for_struct(&parse_quote! {
@@ -1198,6 +1206,7 @@ class Person {
 
         let (result, mut ctx) = eval_js_with_context(&test_nested).unwrap();
         let nested_result = js_to_string(&result, &mut ctx);
+        println!("DEBUG deeply nested result: {}", &nested_result);
         assert!(nested_result.contains("Deep: Test"));
         assert!(nested_result.contains("25"));
         assert!(nested_result.contains("true"));
@@ -1303,7 +1312,9 @@ class Person {
         // Should have multiple this references
         assert!(this_count > 0, "Should have some this references");
 
-        // Should be valid JavaScript
-        assert!(is_valid_js(&methods_js));
+        // Should be valid JavaScript - but need the class
+        let js_code = format!("class TestClass {{ }}\n {}\n",  &methods_js);
+        eval_js(&js_code).unwrap();
+        assert!(is_valid_js(&js_code));
     }
 }
