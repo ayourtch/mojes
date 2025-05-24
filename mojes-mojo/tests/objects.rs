@@ -592,6 +592,8 @@ class Person {
             struct_js, methods_js
         );
 
+        eprintln!("DEBUG adult condition code: {}", &test_adult_conditional);
+
         let (result, mut ctx) = eval_js_with_context(&test_adult_conditional).unwrap();
         assert_eq!(js_to_number(&result, &mut ctx), 35.0); // 25 + 10
 
