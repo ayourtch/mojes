@@ -6,9 +6,8 @@ use syn::{ItemEnum, ItemFn, ItemStruct, Pat, parse_macro_input};
 use mojes_mojo::format_rust_type;
 use mojes_mojo::generate_js_class_for_struct;
 use mojes_mojo::generate_js_enum;
+use mojes_mojo::generate_js_methods_for_impl;
 use mojes_mojo::rust_block_to_js;
-use mojes_mojo::generate_js_methods_for_impl; 
-
 
 #[proc_macro_attribute]
 pub fn impl_to_js(_attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -166,7 +165,7 @@ pub fn js_type(_attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn js_object(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let input_impl = parse_macro_input!(item as ItemImpl);
-    
+
     // Get the struct name from the impl block
     let struct_name = if let syn::Type::Path(type_path) = &*input_impl.self_ty {
         if let Some(segment) = type_path.path.segments.last() {
@@ -174,14 +173,18 @@ pub fn js_object(_attr: TokenStream, item: TokenStream) -> TokenStream {
         } else {
             return syn::Error::new_spanned(
                 &input_impl.self_ty,
-                "Could not determine struct name from impl block"
-            ).to_compile_error().into();
+                "Could not determine struct name from impl block",
+            )
+            .to_compile_error()
+            .into();
         }
     } else {
         return syn::Error::new_spanned(
             &input_impl.self_ty,
-            "js_object can only be applied to impl blocks for named types"
-        ).to_compile_error().into();
+            "js_object can only be applied to impl blocks for named types",
+        )
+        .to_compile_error()
+        .into();
     };
 
     // Generate JavaScript methods for the impl block

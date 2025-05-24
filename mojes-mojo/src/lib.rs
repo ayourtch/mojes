@@ -2,8 +2,7 @@ use syn::punctuated::Punctuated;
 use syn::token::Comma;
 use syn::{Block, Expr, Fields, ItemEnum, ItemStruct, Pat, Stmt, Type};
 
-
-use syn::{ItemImpl, ImplItem, Signature, FnArg, ReturnType};
+use syn::{FnArg, ImplItem, ItemImpl, ReturnType, Signature};
 
 /// Generate JavaScript methods for a Rust impl block
 pub fn generate_js_methods_for_impl(input_impl: &ItemImpl) -> String {
@@ -18,10 +17,10 @@ pub fn generate_js_methods_for_impl(input_impl: &ItemImpl) -> String {
     };
 
     let mut js_methods = String::new();
-    
+
     // Add methods to the prototype
     js_methods.push_str(&format!("// Methods for {}\n", struct_name));
-    
+
     for item in &input_impl.items {
         if let ImplItem::Fn(method) = item {
             let method_js = generate_js_method(&struct_name, method);
@@ -29,7 +28,7 @@ pub fn generate_js_methods_for_impl(input_impl: &ItemImpl) -> String {
             js_methods.push_str("\n\n");
         }
     }
-    
+
     js_methods
 }
 
@@ -38,7 +37,7 @@ pub fn generate_js_methods_for_impl(input_impl: &ItemImpl) -> String {
 
 /// Convert method body to JavaScript with proper self -> this conversion
 fn rust_method_body_to_js(block: &syn::Block) -> String {
-    // We can reuse rust_block_to_js since we've updated rust_expr_to_js 
+    // We can reuse rust_block_to_js since we've updated rust_expr_to_js
     // to handle self -> this conversion at the expression level
     rust_block_to_js(block)
 }
@@ -47,29 +46,34 @@ fn rust_method_body_to_js(block: &syn::Block) -> String {
 fn generate_js_method(struct_name: &str, method: &syn::ImplItemFn) -> String {
     let method_name = method.sig.ident.to_string();
     let sig = &method.sig;
-    
+
     // Check if this is a static method (no self parameter)
-    let is_static = !sig.inputs.iter().any(|arg| {
-        matches!(arg, FnArg::Receiver(_))
-    });
-    
+    let is_static = !sig
+        .inputs
+        .iter()
+        .any(|arg| matches!(arg, FnArg::Receiver(_)));
+
     // Extract non-self parameters
-    let params: Vec<String> = sig.inputs.iter().filter_map(|arg| {
-        match arg {
-            FnArg::Receiver(_) => None, // Skip self
-            FnArg::Typed(pat_type) => {
-                if let Pat::Ident(pat_ident) = &*pat_type.pat {
-                    Some(pat_ident.ident.to_string())
-                } else {
-                    None
+    let params: Vec<String> = sig
+        .inputs
+        .iter()
+        .filter_map(|arg| {
+            match arg {
+                FnArg::Receiver(_) => None, // Skip self
+                FnArg::Typed(pat_type) => {
+                    if let Pat::Ident(pat_ident) = &*pat_type.pat {
+                        Some(pat_ident.ident.to_string())
+                    } else {
+                        None
+                    }
                 }
             }
-        }
-    }).collect();
-    
+        })
+        .collect();
+
     // Convert method body to JavaScript with self
     let body_js = rust_method_body_to_js(&method.block);
-    
+
     // Generate appropriate JavaScript method
     if is_static {
         // Static method
@@ -1123,7 +1127,21 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
                     }
                 }
                 Expr::MethodCall(method_call) => {
-                    let receiver = rust_expr_to_js(&method_call.receiver);
+                    // Special check for self method calls
+                    let js_receiver = if let Expr::Path(path) = &*method_call.receiver {
+                        if let Some(last_segment) = path.path.segments.last() {
+                            if last_segment.ident == "self" {
+                                "this".to_string()
+                            } else {
+                                rust_expr_to_js(&method_call.receiver)
+                            }
+                        } else {
+                            rust_expr_to_js(&method_call.receiver)
+                        }
+                    } else {
+                        rust_expr_to_js(&method_call.receiver)
+                    };
+
                     let method_name = method_call.method.to_string();
 
                     // Check if this is a constructor call (Type::new())
@@ -1154,15 +1172,78 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
 
                                 if js_constructor_types.contains(&type_name.as_str()) {
                                     // Convert arguments
-                                    let args: Vec<String> =
-                                        call.args.iter().map(|arg| rust_expr_to_js(arg)).collect();
+                                    let args: Vec<String> = method_call
+                                        .args
+                                        .iter()
+                                        .map(|arg| rust_expr_to_js(arg))
+                                        .collect();
                                     return format!("new {}({})", type_name, args.join(", "));
                                 }
                             }
                         }
                     }
 
-                    format!("{}.{}", receiver, method_name)
+                    // Map Rust methods to JavaScript methods
+                    let js_method = match method_name.as_str() {
+                        "len" => {
+                            // Special case: .len() becomes .length (property, not method)
+                            return format!("{}.length", js_receiver);
+                        }
+                        "clone" => {
+                            // Special case, use shallow copy
+                            return format!("{}", js_receiver);
+                        }
+                        "push" => "push",
+                        "pop" => "pop",
+                        "remove" => "splice",
+                        "insert" => "splice",
+                        "iter" => "",    // In JS, we don't need .iter() for iteration
+                        "collect" => "", // In JS, we don't need .collect()
+                        "map" => "map",
+                        "filter" => "filter",
+                        "find" => "find",
+                        "contains" => "includes",
+                        "to_string" => "toString",
+                        "to_uppercase" => "toUpperCase",
+                        "to_lowercase" => "toLowerCase",
+                        "trim" => "trim",
+                        "trim_start" => "trimStart",
+                        "trim_end" => "trimEnd",
+                        "starts_with" => "startsWith",
+                        "ends_with" => "endsWith",
+                        "replace" => "replace",
+                        "split" => "split",
+                        "join" => "join",
+                        "is_some" => "", // Handle Option methods specially
+                        "is_none" => "",
+                        "unwrap" => "",
+                        _ => &method_name,
+                    };
+
+                    // Convert arguments
+                    let args: Vec<String> = method_call
+                        .args
+                        .iter()
+                        .map(|arg| rust_expr_to_js(arg))
+                        .collect();
+
+                    // Handle empty JS method (e.g., .iter(), .collect())
+                    if js_method.is_empty() {
+                        match method_name.as_str() {
+                            "is_some" => format!(
+                                "({} !== null && {} !== undefined)",
+                                js_receiver, js_receiver
+                            ),
+                            "is_none" => format!(
+                                "({} === null || {} === undefined)",
+                                js_receiver, js_receiver
+                            ),
+                            "unwrap" => js_receiver, // Just use the value itself
+                            _ => js_receiver,
+                        }
+                    } else {
+                        format!("{}.{}({})", js_receiver, js_method, args.join(", "))
+                    }
                 }
                 _ => rust_expr_to_js(&call.func),
             };
@@ -1518,18 +1599,27 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
 
         // Handle field access
         Expr::Field(field) => {
+            // Special check for self.field pattern
+            if let Expr::Path(path) = &*field.base {
+                if let Some(last_segment) = path.path.segments.last() {
+                    if last_segment.ident == "self" {
+                        let member = match &field.member {
+                            syn::Member::Named(ident) => ident.to_string(),
+                            syn::Member::Unnamed(index) => index.index.to_string(),
+                        };
+                        return format!("this.{}", member);
+                    }
+                }
+            }
+
+            // Regular field access handling
             let base = rust_expr_to_js(&field.base);
             let member = match &field.member {
                 syn::Member::Named(ident) => ident.to_string(),
                 syn::Member::Unnamed(index) => index.index.to_string(),
             };
 
-            // Special handling for self.field -> this.field
-            if base == "this" {
-                format!("this.{}", member)
-            } else {
-                format!("{}.{}", base, member)
-            }
+            format!("{}.{}", base, member)
         }
 
         // Handle struct instantiation as JS object
