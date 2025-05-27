@@ -655,13 +655,23 @@ fn handle_for_expr(expr: &syn::ExprForLoop) -> String {
     )
 }
 
+fn unwrap_pattern_types(pat: &Pat) -> &Pat {
+    match pat {
+        Pat::Type(pat_type) => unwrap_pattern_types(&pat_type.pat),
+        _ => pat,
+    }
+}
+
 fn handle_local_statement(local: &syn::Local) -> String {
     // Handle variable declarations
     if let Some(init) = &local.init {
         // We directly access the expr from the init
         let init_expr = &init.expr;
 
-        match &local.pat {
+        // Unwrap any type annotations first
+        let actual_pattern = unwrap_pattern_types(&local.pat);
+
+        match actual_pattern {
             Pat::Ident(pat_ident) => {
                 let var_name = pat_ident.ident.to_string();
                 let init_js = rust_expr_to_js(init_expr);
@@ -679,7 +689,8 @@ fn handle_local_statement(local: &syn::Local) -> String {
                     .elems
                     .iter()
                     .filter_map(|pat| {
-                        if let Pat::Ident(pat_ident) = pat {
+                        let unwrapped = unwrap_pattern_types(pat);
+                        if let Pat::Ident(pat_ident) = unwrapped {
                             Some(pat_ident.ident.to_string())
                         } else {
                             None
@@ -695,7 +706,8 @@ fn handle_local_statement(local: &syn::Local) -> String {
                     .fields
                     .iter()
                     .filter_map(|field| {
-                        if let Pat::Ident(pat_ident) = &*field.pat {
+                        let unwrapped = unwrap_pattern_types(&field.pat);
+                        if let Pat::Ident(pat_ident) = unwrapped {
                             Some(pat_ident.ident.to_string())
                         } else {
                             None
@@ -710,7 +722,8 @@ fn handle_local_statement(local: &syn::Local) -> String {
         }
     } else {
         // Variable declaration without initialization
-        match &local.pat {
+        let actual_pattern = unwrap_pattern_types(&local.pat);
+        match actual_pattern {
             Pat::Ident(pat_ident) => {
                 let var_name = pat_ident.ident.to_string();
 
@@ -876,6 +889,24 @@ fn get_closure_param_name(param: &syn::Pat) -> Option<String> {
     match param {
         syn::Pat::Ident(pat_ident) => Some(pat_ident.ident.to_string()),
         syn::Pat::Reference(pat_ref) => get_closure_param_name(&pat_ref.pat),
+        _ => None,
+    }
+}
+
+fn guess_conversion_method(method_name: &str, receiver: &Expr) -> Option<String> {
+    match method_name {
+        "into" => {
+            match receiver {
+                Expr::Lit(lit) => match &lit.lit {
+                    syn::Lit::Str(_) => Some("Number".to_string()), // String to number
+                    syn::Lit::Int(_) | syn::Lit::Float(_) => Some("String".to_string()), // Number to string
+                    _ => Some("String".to_string()), // Default to string
+                },
+                _ => Some("Number".to_string()), // Default guess: convert to number
+            }
+        }
+        "parse" => Some("parseFloat".to_string()),
+        "clone" => Some("".to_string()), // Just remove .clone()
         _ => None,
     }
 }
@@ -1293,11 +1324,24 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
             format!("{}({})", func_name, args.join(", "))
         }
 
-        // Handle Option::Some and Option::None methods better
         Expr::MethodCall(method_call) => {
-            // Handle method calls
-            let receiver = rust_expr_to_js(&method_call.receiver);
             let method_name = method_call.method.to_string();
+
+            // Check if this is a conversion method we can handle
+            if let Some(conversion) = guess_conversion_method(&method_name, &method_call.receiver) {
+                let receiver_js = rust_expr_to_js(&method_call.receiver);
+
+                if conversion.is_empty() {
+                    // Empty conversion means just remove the method (like .clone())
+                    return receiver_js;
+                } else {
+                    // Apply the conversion
+                    return format!("{}({})", conversion, receiver_js);
+                }
+            }
+
+            // Handle method calls (existing logic - keep unchanged)
+            let receiver = rust_expr_to_js(&method_call.receiver);
 
             // Map Rust methods to JavaScript methods
             let js_method = match method_name.as_str() {
@@ -1360,7 +1404,6 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
                 format!("{}.{}({})", receiver, js_method, args.join(", "))
             }
         }
-
         // Handle literals
         Expr::Lit(lit) => match &lit.lit {
             syn::Lit::Str(s) => format!(
