@@ -781,7 +781,6 @@ pub fn rust_expr_to_js_with_state(
         }
 
         // Handle additional expression types
-
         Expr::While(while_expr) => handle_while_expr(while_expr, state),
         Expr::ForLoop(for_expr) => handle_for_expr(for_expr, state),
         Expr::Match(match_expr) => handle_match_expr(match_expr, state),
@@ -1407,6 +1406,29 @@ fn handle_local_statement(
 
                 Ok(state.mk_var_decl(&js_var_name, Some(init_expr), !is_mutable))
             }
+            Pat::Type(type_pat) => {
+                // Handle typed patterns like `let x: i32 = 23;`
+                // We ignore the type annotation and just handle the inner pattern
+                match &*type_pat.pat {
+                    Pat::Ident(pat_ident) => {
+                        let var_name = pat_ident.ident.to_string();
+                        let js_var_name = escape_js_identifier(&var_name);
+                        let is_mutable = pat_ident.mutability.is_some();
+
+                        state.declare_variable(var_name, js_var_name.clone(), is_mutable);
+
+                        Ok(state.mk_var_decl(&js_var_name, Some(init_expr), !is_mutable))
+                    }
+                    _ => {
+                        // This is a simplified approach - you might want more sophisticated handling
+                        panic!(
+                            "Complex typed patterns not yet supported: {:?}",
+                            type_pat.pat
+                        )
+                    }
+                }
+            }
+
             Pat::Tuple(tuple_pat) => {
                 // Handle destructuring assignment
                 let var_names: Vec<String> = tuple_pat
