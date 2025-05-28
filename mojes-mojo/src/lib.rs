@@ -718,6 +718,45 @@ fn handle_method_call(
             Ok(state.mk_call_expr(state.mk_member_expr(receiver, "toLowerCase"), js_args))
         }
         "trim" => Ok(state.mk_call_expr(state.mk_member_expr(receiver, "trim"), js_args)),
+        "trim_start" => {
+            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "trimStart"), js_args))
+        }
+        "trim_end" => Ok(state.mk_call_expr(state.mk_member_expr(receiver, "trimEnd"), js_args)),
+        "remove" => {
+            // vec.remove(index) -> vec.splice(index, 1)[0]
+            if js_args.len() == 1 {
+                let splice_call = state.mk_call_expr(
+                    state.mk_member_expr(receiver, "splice"),
+                    vec![js_args[0].clone(), state.mk_num_lit(1.0)],
+                );
+                Ok(js::Expr::Member(js::MemberExpr {
+                    span: DUMMY_SP,
+                    obj: Box::new(splice_call),
+                    prop: js::MemberProp::Computed(js::ComputedPropName {
+                        span: DUMMY_SP,
+                        expr: Box::new(state.mk_num_lit(0.0)),
+                    }),
+                }))
+            } else {
+                Err("remove() expects exactly one argument".to_string())
+            }
+        }
+        "insert" => {
+            // vec.insert(index, item) -> vec.splice(index, 0, item)
+            if js_args.len() == 2 {
+                Ok(state.mk_call_expr(
+                    state.mk_member_expr(receiver, "splice"),
+                    vec![
+                        js_args[0].clone(),
+                        state.mk_num_lit(0.0),
+                        js_args[1].clone(),
+                    ],
+                ))
+            } else {
+                Err("insert() expects exactly two arguments".to_string())
+            }
+        }
+
         "starts_with" => {
             Ok(state.mk_call_expr(state.mk_member_expr(receiver, "startsWith"), js_args))
         }
