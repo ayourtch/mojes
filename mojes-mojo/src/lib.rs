@@ -1590,7 +1590,7 @@ pub fn generate_js_enum_with_state(input_enum: &ItemEnum) -> Result<js::ModuleIt
                 properties.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
                     js::KeyValueProp {
                         key: js::PropName::Ident(state.mk_ident_name(&variant_name)),
-                        value: Box::new(state.mk_str_lit(&variant_name)),
+                        value: Box::new(state.mk_str_lit_single_quote(&variant_name)),
                     },
                 ))));
             }
@@ -1627,7 +1627,7 @@ pub fn generate_js_enum_with_state(input_enum: &ItemEnum) -> Result<js::ModuleIt
                 let mut obj_props = vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
                     js::KeyValueProp {
                         key: js::PropName::Ident(state.mk_ident_name("type")),
-                        value: Box::new(state.mk_str_lit(&variant_name)),
+                        value: Box::new(state.mk_str_lit_single_quote(&variant_name)),
                     },
                 )))];
 
