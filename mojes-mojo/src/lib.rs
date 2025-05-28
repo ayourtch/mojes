@@ -726,6 +726,8 @@ pub fn rust_expr_to_js_with_state(
 
         Expr::Paren(paren) => handle_paren_expr(paren, state),
 
+        Expr::Closure(closure) => handle_closure_expr(closure, state),
+
         _ => {
             panic!("Unsupported expression type: {:?}", expr);
         }
