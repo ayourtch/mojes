@@ -170,7 +170,7 @@ fn test_match_option_expressions() {
 }
 
 #[test]
-fn test_while_loops() {
+fn test_while_loops_1() {
     let expr: Expr = parse_quote! {
         while counter < 3 {
             counter = counter + 1;
@@ -178,6 +178,7 @@ fn test_while_loops() {
     };
 
     let js_code = rust_expr_to_js(&expr);
+    eprintln!("DEBUG test_while_loops_1 js code: {}", &js_code);
     assert!(js_code.contains("while"));
     assert!(js_code.contains("counter < 3"));
     assert!(js_code.contains("counter = counter + 1"));
@@ -212,6 +213,23 @@ fn test_for_loops() {
     assert!(js_code.contains("for"));
     assert!(js_code.contains("const item of items"));
     assert!(js_code.contains("process(item)"));
+}
+
+#[test]
+fn test_while_loops_2() {
+    let expr: Expr = parse_quote! {
+        {
+        let mut count = 0;
+        while count < 5 {
+           count += 1;
+        }
+        count
+        }
+    };
+
+    let js_code = rust_expr_to_js(&expr);
+    println!("DEBUG test_while_loops js code: {}", &js_code);
+    assert!(js_code.contains("while"));
 }
 
 #[test]
