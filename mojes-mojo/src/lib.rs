@@ -2353,6 +2353,7 @@ pub fn handle_format_macro(args: &Punctuated<Expr, Comma>) -> String {
 }
 
 /// Handle reference expressions (&x, &mut y, &expr)
+/// Handle reference expressions (&x, &mut y, &expr)
 fn handle_reference_expr(
     ref_expr: &syn::ExprReference,
     state: &mut TranspilerState,
@@ -2363,12 +2364,20 @@ fn handle_reference_expr(
         // For simple path expressions (variables), handle specially
         Expr::Path(_) => {
             if ref_expr.mutability.is_some() {
-                // Mutable reference - add comment
-                let var_name = match &inner_expr {
-                    js::Expr::Ident(ident) => ident.sym.to_string(),
-                    _ => "unknown".to_string(),
-                };
-                Ok(state.mk_str_lit(&format!("{} /* was &mut in Rust */", var_name)))
+                // Mutable reference - return the variable with a comment
+                // We need to create a JavaScript comment, not a string literal
+                Ok(js::Expr::Ident(js::Ident::new(
+                    format!(
+                        "{} /* was &mut in Rust */",
+                        match &inner_expr {
+                            js::Expr::Ident(ident) => ident.sym.to_string(),
+                            _ => "unknown".to_string(),
+                        }
+                    )
+                    .into(),
+                    DUMMY_SP,
+                    SyntaxContext::empty(),
+                )))
             } else {
                 // Immutable reference to variable - just return the variable
                 Ok(inner_expr)
@@ -2376,7 +2385,7 @@ fn handle_reference_expr(
         }
         // For string literals, just return the literal (no comment needed)
         Expr::Lit(lit) if matches!(lit.lit, syn::Lit::Str(_)) => Ok(inner_expr),
-        // For other expressions, add a comment
+        // For other expressions, we need to create a comment expression
         _ => {
             let comment = if ref_expr.mutability.is_some() {
                 " /* was &mut in Rust */"
@@ -2384,9 +2393,25 @@ fn handle_reference_expr(
                 " /* was & in Rust */"
             };
 
-            // Create a template literal to combine the expression with the comment
-            Ok(state
-                .mk_template_literal(vec!["".to_string(), comment.to_string()], vec![inner_expr]))
+            // Create an identifier with the expression and comment combined
+            // This is a bit of a hack, but it's the cleanest way to add comments
+            Ok(js::Expr::Ident(js::Ident::new(
+                format!(
+                    "{}{}",
+                    // Convert the inner expression back to string
+                    match ast_to_code(&[js::ModuleItem::Stmt(js::Stmt::Expr(js::ExprStmt {
+                        span: DUMMY_SP,
+                        expr: Box::new(inner_expr.clone()),
+                    }))]) {
+                        Ok(code) => code.trim_end_matches(';').trim().to_string(),
+                        Err(_) => "expr".to_string(),
+                    },
+                    comment
+                )
+                .into(),
+                DUMMY_SP,
+                SyntaxContext::empty(),
+            )))
         }
     }
 }
