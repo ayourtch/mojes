@@ -459,7 +459,18 @@ pub fn rust_expr_to_js_with_state(
     match expr {
         // Handle literals
         Expr::Lit(lit) => match &lit.lit {
-            syn::Lit::Str(s) => Ok(state.mk_str_lit(&s.value())),
+            syn::Lit::Str(s) => {
+                let value = s.value();
+                // Properly escape the string for JavaScript
+                let escaped = value
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+                    .replace('\n', "\\n")
+                    .replace('\t', "\\t")
+                    .replace('\r', "\\r");
+                Ok(state.mk_str_lit(&escaped))
+            }
+
             syn::Lit::Int(i) => {
                 let value = i
                     .base10_parse::<f64>()
@@ -671,6 +682,15 @@ pub fn rust_expr_to_js_with_state(
 
         // Handle macro expressions
         Expr::Macro(macro_expr) => handle_macro_expr(&macro_expr.mac, state),
+
+        // Handle struct expressions
+        Expr::Struct(struct_expr) => handle_struct_expr(struct_expr, state),
+
+        // Handle for loops
+        Expr::ForLoop(for_expr) => handle_for_expr(for_expr, state),
+
+        // Handle match expressions
+        Expr::Match(match_expr) => handle_match_expr(match_expr, state),
 
         _ => {
             state.add_warning(format!("Unsupported expression type: {:?}", expr));
@@ -1091,7 +1111,16 @@ fn handle_format_macro_with_state(
     state: &mut TranspilerState,
 ) -> Result<js::Expr, String> {
     if args.is_empty() {
-        return Ok(state.mk_str_lit(""));
+        return Ok(js::Expr::Tpl(js::Tpl {
+            span: DUMMY_SP,
+            exprs: vec![],
+            quasis: vec![js::TplElement {
+                span: DUMMY_SP,
+                tail: true,
+                cooked: Some("".into()),
+                raw: swc_atoms::Atom::new("".to_string()),
+            }],
+        }));
     }
 
     // Get the format string
