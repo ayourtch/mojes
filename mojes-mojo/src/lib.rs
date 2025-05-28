@@ -1705,6 +1705,18 @@ pub fn ast_to_code(module_items: &[js::ModuleItem]) -> Result<String, String> {
     Ok(swc_ecma_codegen::to_code(&module))
 }
 
+/// Convert JavaScript AST to code string, trimmed of trailing semicolons and whitespace
+pub fn ast_to_code_trimmed(module_items: &[js::ModuleItem]) -> Result<String, String> {
+    let code = ast_to_code(module_items)?;
+
+    // Properly trim trailing semicolons and whitespace
+    Ok(code
+        .trim_end_matches('\n')
+        .trim_end_matches(';') // Remove trailing semicolon
+        .trim_end() // Remove any remaining whitespace
+        .to_string())
+}
+
 /// Convenience function to transpile a complete impl block to JavaScript code
 pub fn transpile_impl_to_js(input_impl: &ItemImpl) -> Result<String, String> {
     let module_items = generate_js_methods_for_impl_with_state(input_impl)?;
@@ -2360,14 +2372,9 @@ pub fn handle_format_macro(args: &Punctuated<Expr, Comma>) -> String {
         expr: Box::new(expr),
     }))];
 
-    let code =
-        ast_to_code(&module_items).expect("Failed to convert format macro to JavaScript code");
-
-    // Extract just the expression part, removing the trailing semicolon and whitespace
-    code.trim_end_matches('\n')
-        .trim_end()
-        .trim_end_matches(';')
-        .to_string()
+    let code = ast_to_code_trimmed(&module_items)
+        .expect("Failed to convert format macro to JavaScript code");
+    code
 }
 
 /// Handle reference expressions (&x, &mut y, &expr)
@@ -2417,10 +2424,12 @@ fn handle_reference_expr(
                 format!(
                     "{}{}",
                     // Convert the inner expression back to string
-                    match ast_to_code(&[js::ModuleItem::Stmt(js::Stmt::Expr(js::ExprStmt {
-                        span: DUMMY_SP,
-                        expr: Box::new(inner_expr.clone()),
-                    }))]) {
+                    match ast_to_code_trimmed(&[js::ModuleItem::Stmt(js::Stmt::Expr(
+                        js::ExprStmt {
+                            span: DUMMY_SP,
+                            expr: Box::new(inner_expr.clone()),
+                        }
+                    ))]) {
                         Ok(code) => code.trim_end_matches(';').trim().to_string(),
                         Err(_) => "expr".to_string(),
                     },
@@ -2462,14 +2471,9 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
         expr: Box::new(js_expr),
     }))];
 
-    let code =
-        ast_to_code(&module_items).expect("Failed to convert expression AST to JavaScript code");
-
-    // Extract just the expression part, removing the trailing semicolon and whitespace
-    code.trim_end_matches('\n')
-        .trim_end()
-        .trim_end_matches(';')
-        .to_string()
+    let code = ast_to_code_trimmed(&module_items)
+        .expect("Failed to convert expression AST to JavaScript code");
+    code
 }
 
 /// Generate JavaScript class for struct (old API)
