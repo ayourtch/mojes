@@ -2208,51 +2208,129 @@ fn handle_for_expr(
     for_expr: &syn::ExprForLoop,
     state: &mut TranspilerState,
 ) -> Result<js::Expr, String> {
-    // Extract the loop variable
-    let loop_var = if let Pat::Ident(pat_ident) = &*for_expr.pat {
-        pat_ident.ident.to_string()
-    } else {
-        panic!("Unsupported for loop pattern {:?}", &*for_expr.pat);
-    };
-
-    let js_loop_var = escape_js_identifier(&loop_var);
-
     // Convert the iterable expression
     let iterable = rust_expr_to_js_with_state(&for_expr.expr, state)?;
 
     // Convert loop body
     let body_stmts = rust_block_to_js_with_state(&for_expr.body, state)?;
 
-    // Create for...of loop
-    let for_stmt = js::Stmt::ForOf(js::ForOfStmt {
-        span: DUMMY_SP,
-        is_await: false,
-        left: js::ForHead::VarDecl(Box::new(js::VarDecl {
-            span: DUMMY_SP,
-            kind: js::VarDeclKind::Const,
-            declare: false,
-            decls: vec![js::VarDeclarator {
+    match &*for_expr.pat {
+        Pat::Ident(pat_ident) => {
+            // Simple case: for x in items
+            let loop_var = pat_ident.ident.to_string();
+            let js_loop_var = escape_js_identifier(&loop_var);
+
+            // Create for...of loop
+            let for_stmt = js::Stmt::ForOf(js::ForOfStmt {
                 span: DUMMY_SP,
-                name: js::Pat::Ident(js::BindingIdent {
-                    id: state.mk_ident(&js_loop_var),
-                    type_ann: None,
-                }),
-                init: None,
-                definite: false,
-            }],
-            ctxt: SyntaxContext::empty(),
-        })),
-        right: Box::new(iterable),
-        body: Box::new(js::Stmt::Block(js::BlockStmt {
-            span: DUMMY_SP,
-            stmts: body_stmts,
-            ctxt: SyntaxContext::empty(),
-        })),
-    });
+                is_await: false,
+                left: js::ForHead::VarDecl(Box::new(js::VarDecl {
+                    span: DUMMY_SP,
+                    kind: js::VarDeclKind::Const,
+                    declare: false,
+                    decls: vec![js::VarDeclarator {
+                        span: DUMMY_SP,
+                        name: js::Pat::Ident(js::BindingIdent {
+                            id: state.mk_ident(&js_loop_var),
+                            type_ann: None,
+                        }),
+                        init: None,
+                        definite: false,
+                    }],
+                    ctxt: SyntaxContext::empty(),
+                })),
+                right: Box::new(iterable),
+                body: Box::new(js::Stmt::Block(js::BlockStmt {
+                    span: DUMMY_SP,
+                    stmts: body_stmts,
+                    ctxt: SyntaxContext::empty(),
+                })),
+            });
 
-    Ok(state.mk_iife(vec![for_stmt]))
+            Ok(state.mk_iife(vec![for_stmt]))
+        }
+
+        Pat::Tuple(tuple_pat) => {
+            // Tuple destructuring case: for (i, element) in items.enumerate()
+            let var_names: Vec<String> = tuple_pat
+                .elems
+                .iter()
+                .filter_map(|pat| {
+                    if let Pat::Ident(pat_ident) = pat {
+                        Some(pat_ident.ident.to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            if var_names.is_empty() {
+                return Err("No valid identifiers found in tuple pattern".to_string());
+            }
+
+            // Create array destructuring pattern for the loop variable
+            let destructure_pattern = js::Pat::Array(js::ArrayPat {
+                span: DUMMY_SP,
+                elems: var_names
+                    .iter()
+                    .map(|name| {
+                        let js_name = escape_js_identifier(name);
+                        state.declare_variable(name.clone(), js_name.clone(), false);
+                        Some(js::Pat::Ident(js::BindingIdent {
+                            id: state.mk_ident(&js_name),
+                            type_ann: None,
+                        }))
+                    })
+                    .collect(),
+                optional: false,
+                type_ann: None,
+            });
+
+            // Create for...of loop with destructuring
+            let for_stmt = js::Stmt::ForOf(js::ForOfStmt {
+                span: DUMMY_SP,
+                is_await: false,
+                left: js::ForHead::VarDecl(Box::new(js::VarDecl {
+                    span: DUMMY_SP,
+                    kind: js::VarDeclKind::Const,
+                    declare: false,
+                    decls: vec![js::VarDeclarator {
+                        span: DUMMY_SP,
+                        name: destructure_pattern,
+                        init: None,
+                        definite: false,
+                    }],
+                    ctxt: SyntaxContext::empty(),
+                })),
+                right: Box::new(iterable),
+                body: Box::new(js::Stmt::Block(js::BlockStmt {
+                    span: DUMMY_SP,
+                    stmts: body_stmts,
+                    ctxt: SyntaxContext::empty(),
+                })),
+            });
+
+            Ok(state.mk_iife(vec![for_stmt]))
+        }
+
+        Pat::Type(type_pat) => {
+            // Handle typed patterns like `for x: i32 in items`
+            // Recursively handle the inner pattern, ignoring the type
+            let inner_for_expr = syn::ExprForLoop {
+                attrs: for_expr.attrs.clone(),
+                label: for_expr.label.clone(),
+                for_token: for_expr.for_token,
+                pat: type_pat.pat.clone(),
+                in_token: for_expr.in_token,
+                expr: for_expr.expr.clone(),
+                body: for_expr.body.clone(),
+            };
+            handle_for_expr(&inner_for_expr, state)
+        }
+
+        _ => Err(format!("Unsupported for loop pattern {:?}", &*for_expr.pat)),
+    }
 }
-
 /// Handle pattern matching and variable binding - shared between match and if-let
 fn handle_pattern_binding(
     pat: &Pat,
