@@ -493,6 +493,8 @@ fn convert_if_to_stmt(
     if_expr: &syn::ExprIf,
     state: &mut TranspilerState,
 ) -> Result<js::Stmt, String> {
+    println!("DEBUG IF: {:?} {:?}", &block_action, &if_expr);
+    // panic!("XXX");
     // Check if this is an if-let expression
     if let Some(if_let_stmt) = handle_if_let_as_stmt(block_action, if_expr, state)? {
         return Ok(if_let_stmt);
@@ -898,13 +900,17 @@ pub fn rust_block_to_js_with_state(
 ) -> Result<Vec<js::Stmt>, String> {
     let mut js_stmts = Vec::new();
     println!("DEBUG BLK: {:?}", &block_action);
+    if block_action == BlockAction::NoReturn {
+        // panic!("XXX");
+    }
 
     state.enter_scope();
 
     for stmt in &block.stmts {
         match stmt {
             Stmt::Local(local) => {
-                let js_stmt = handle_local_statement(local, state)?;
+                println!("DEBUG BLOCK LOCAL: {:?}", &local);
+                let js_stmt = handle_local_statement(block_action, local, state)?;
                 js_stmts.push(js_stmt);
             }
             Stmt::Expr(expr, semi) => {
@@ -1843,11 +1849,12 @@ fn handle_format_macro_with_state(
 
 /// Handle local variable declarations
 fn handle_local_statement(
+    block_action: BlockAction,
     local: &syn::Local,
     state: &mut TranspilerState,
 ) -> Result<js::Stmt, String> {
     if let Some(init) = &local.init {
-        let init_expr = rust_expr_to_js_with_state(&init.expr, state)?;
+        let init_expr = rust_expr_to_js_with_action_and_state(block_action, &init.expr, state)?;
 
         match &local.pat {
             Pat::Ident(pat_ident) => {
@@ -3620,7 +3627,7 @@ fn handle_reference_expr(
 pub fn rust_block_to_js(block: &Block) -> String {
     let mut state = TranspilerState::new();
 
-    let stmts = rust_block_to_js_with_state(BlockAction::NoReturn, block, &mut state)
+    let stmts = rust_block_to_js_with_state(BlockAction::Return, block, &mut state)
         .expect("Failed to convert Rust block to JavaScript");
 
     let module_items: Vec<js::ModuleItem> = stmts
