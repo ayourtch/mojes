@@ -873,6 +873,7 @@ fn handle_function_call(
                     }
                     "format" => {
                         // Handle format! macro as function call
+                        panic!("NEVER CALLED?");
                         handle_format_macro_with_state(&call.args, state)
                     }
                     "Some" => {
@@ -1074,7 +1075,8 @@ fn handle_format_like_macro(
     let parts = smart_comma_split(token_string);
 
     if parts.is_empty() {
-        return Ok(state.mk_str_lit(""));
+        /* the call 'format!()' should not ever happen, but... */
+        return Ok(state.mk_template_literal(vec![], vec![]));
     }
 
     // Get the format string
@@ -1093,7 +1095,9 @@ fn handle_format_like_macro(
 
     // Check if there are placeholders
     if !format_str.contains("{}") {
-        return Ok(state.mk_str_lit(format_str));
+        return Ok(state.mk_template_literal(vec![format_str.into()], vec![]));
+        // this will return just the quoted format string.
+        // return Ok(state.mk_str_lit(format_str));
     }
 
     // Split format string at placeholders

@@ -212,6 +212,10 @@ fn test_match_with_variable_binding() {
     };
 
     let js_code = rust_expr_to_js(&expr);
+    println!(
+        "DEBUG test_match_with_variable_binding js code: {}",
+        &js_code
+    );
     assert!(js_code.contains("const x = _match_value"));
 }
 
@@ -225,6 +229,7 @@ fn test_match_with_mixed_patterns() {
     };
 
     let js_code = rust_expr_to_js(&expr);
+    println!("DEBUG test_match_with_mixed_patterns js code: {}", &js_code);
     assert!(js_code.contains("=== 42"));
     assert!(js_code.contains("const x = _match_value"));
 }
@@ -503,6 +508,10 @@ fn test_mixed_expressions_in_blocks() {
     };
 
     let js_code = rust_block_to_js(&block);
+    println!(
+        "DEBUG test_mixed_expressions_in_blocks js code: {}",
+        &js_code
+    );
 
     // Should contain all expected parts
     assert!(js_code.contains("const data = [1, 2, 3]"));
@@ -579,6 +588,10 @@ fn test_format_macro_edge_cases() {
     // Empty format string
     let expr: Expr = parse_quote!(format!(""));
     let js_code = rust_expr_to_js(&expr);
+    println!(
+        "DEBUG: test_format_macro_edge_cases 1 js code: {}",
+        &js_code
+    );
     assert_eq!(js_code, "``");
 
     // Format with no placeholders but arguments (invalid Rust, but test behavior)
@@ -588,6 +601,10 @@ fn test_format_macro_edge_cases() {
         }
     };
     let js_code = rust_block_to_js(&block);
+    println!(
+        "DEBUG: test_format_macro_edge_cases 2 js code: {}",
+        &js_code
+    );
     // Should handle gracefully
     assert!(js_code.contains("console.log"));
 }
