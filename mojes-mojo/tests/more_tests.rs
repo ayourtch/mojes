@@ -228,6 +228,7 @@ fn test_match_wildcard_patterns() {
     };
 
     let js_code = rust_expr_to_js(&expr);
+    println!("DEBUG test_match_wildcard_patterns js code: {}", &js_code);
     assert!(js_code.contains("=== 42"));
     assert!(js_code.contains("else { // Default case"));
 }
