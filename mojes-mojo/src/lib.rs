@@ -1737,8 +1737,12 @@ pub fn format_rust_type(ty: &Type) -> String {
     }
 }
 
-/// Convert JavaScript AST to code string
 pub fn ast_to_code(module_items: &[js::ModuleItem]) -> Result<String, String> {
+    ast_to_code_compact(module_items)
+}
+
+/// Convert JavaScript AST to code string
+pub fn ast_to_code_verbose(module_items: &[js::ModuleItem]) -> Result<String, String> {
     let module = js::Module {
         span: DUMMY_SP,
         body: module_items.to_vec(),
@@ -1746,6 +1750,44 @@ pub fn ast_to_code(module_items: &[js::ModuleItem]) -> Result<String, String> {
     };
 
     Ok(swc_ecma_codegen::to_code(&module))
+}
+
+/// Convert JavaScript AST to compact code string (single line arrays)
+pub fn ast_to_code_compact(module_items: &[js::ModuleItem]) -> Result<String, String> {
+    use swc_common::SourceMap;
+    use swc_common::sync::Lrc;
+    use swc_ecma_codegen::{Config, Emitter};
+
+    let cm = Lrc::new(SourceMap::new(swc_common::FilePathMapping::empty()));
+    let mut buf = vec![];
+
+    let mut config = Config::default();
+    config.minify = false;
+    config.ascii_only = false;
+    config.omit_last_semi = false;
+    config.target = swc_ecma_ast::EsVersion::Es2020;
+    config.emit_assert_for_import_attributes = true;
+    config.inline_script = false;
+    config.reduce_escaped_newline = false;
+
+    let module = js::Module {
+        span: DUMMY_SP,
+        body: module_items.to_vec(),
+        shebang: None,
+    };
+
+    let mut emitter = Emitter {
+        cfg: config,
+        cm: cm.clone(),
+        comments: None,
+        wr: swc_ecma_codegen::text_writer::JsWriter::new(cm, "\n", &mut buf, None),
+    };
+
+    emitter
+        .emit_module(&module)
+        .map_err(|e| format!("Codegen error: {}", e))?;
+
+    Ok(String::from_utf8(buf).map_err(|e| format!("UTF8 error: {}", e))?)
 }
 
 /// Convert JavaScript AST to code string, trimmed of trailing semicolons and whitespace
