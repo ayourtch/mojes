@@ -5,7 +5,8 @@ use swc_ecma_codegen;
 use syn::punctuated::Punctuated;
 use syn::token::Comma;
 use syn::{Block, Expr, Fields, ItemEnum, ItemStruct, Pat, Stmt, Type};
-use syn::{FnArg, ImplItem, ItemImpl, ReturnType, Signature};
+// use syn::{FnArg, ImplItem, ItemImpl, ReturnType, Signature};
+use syn::{FnArg, ImplItem, ItemImpl};
 
 /// Transpiler state for managing context and symbols during translation
 pub struct TranspilerState {
@@ -36,6 +37,14 @@ impl TranspilerState {
             errors: Vec::new(),
             warnings: Vec::new(),
             temp_var_counter: 0,
+        }
+    }
+    /// Convert Pat to Param for function parameters
+    pub fn pat_to_param(&self, pat: js::Pat) -> js::Param {
+        js::Param {
+            span: DUMMY_SP,
+            decorators: vec![],
+            pat,
         }
     }
     pub fn expr_to_assign_target(&self, expr: js::Expr) -> Result<js::AssignTarget, String> {
@@ -350,7 +359,7 @@ fn generate_js_method(
     };
 
     let function = js::Function {
-        params,
+        params: params.into_iter().map(|p| state.pat_to_param(p)).collect(),
         decorators: vec![],
         span: DUMMY_SP,
         body: Some(body),
@@ -896,7 +905,7 @@ fn handle_macro_expr(mac: &syn::Macro, state: &mut TranspilerState) -> Result<js
                         span: DUMMY_SP,
                         props: vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
                             js::KeyValueProp {
-                                key: js::PropName::Ident(state.mk_ident("length")),
+                                key: js::PropName::Ident(state.mk_ident_name("length")),
                                 value: Box::new(count_expr),
                             },
                         )))],
@@ -1347,7 +1356,7 @@ pub fn generate_js_class_for_struct(input_struct: &ItemStruct) -> Result<js::Mod
     // Create constructor method
     let constructor = js::Constructor {
         span: DUMMY_SP,
-        key: js::PropName::Ident(state.mk_ident("constructor")),
+        key: js::PropName::Ident(state.mk_ident_name("constructor")),
         params: constructor_params,
         body: Some(js::BlockStmt {
             span: DUMMY_SP,
@@ -1396,7 +1405,7 @@ pub fn generate_js_enum(input_enum: &ItemEnum) -> Result<js::ModuleItem, String>
                 // Simple enum variants become string values
                 properties.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
                     js::KeyValueProp {
-                        key: js::PropName::Ident(state.mk_ident(&variant_name)),
+                        key: js::PropName::Ident(state.mk_ident_name(&variant_name)),
                         value: Box::new(state.mk_str_lit(&variant_name)),
                     },
                 ))));
@@ -1421,7 +1430,7 @@ pub fn generate_js_enum(input_enum: &ItemEnum) -> Result<js::ModuleItem, String>
                 // Create function body that returns an object
                 let mut obj_props = vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
                     js::KeyValueProp {
-                        key: js::PropName::Ident(state.mk_ident("type")),
+                        key: js::PropName::Ident(state.mk_ident_name("type")),
                         value: Box::new(state.mk_str_lit(&variant_name)),
                     },
                 )))];
@@ -1429,7 +1438,7 @@ pub fn generate_js_enum(input_enum: &ItemEnum) -> Result<js::ModuleItem, String>
                 for i in 0..param_count {
                     obj_props.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
                         js::KeyValueProp {
-                            key: js::PropName::Ident(state.mk_ident(&format!("value{}", i))),
+                            key: js::PropName::Ident(state.mk_ident_name(&format!("value{}", i))),
                             value: Box::new(js::Expr::Ident(
                                 state.mk_ident(&format!("value{}", i)),
                             )),
@@ -1462,7 +1471,7 @@ pub fn generate_js_enum(input_enum: &ItemEnum) -> Result<js::ModuleItem, String>
 
                 properties.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
                     js::KeyValueProp {
-                        key: js::PropName::Ident(state.mk_ident(&variant_name)),
+                        key: js::PropName::Ident(state.mk_ident_name(&variant_name)),
                         value: Box::new(js::Expr::Fn(js::FnExpr {
                             ident: None,
                             function: Box::new(function),
@@ -1942,7 +1951,7 @@ fn handle_range_expr(
                 span: DUMMY_SP,
                 props: vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
                     js::KeyValueProp {
-                        key: js::PropName::Ident(state.mk_ident("length")),
+                        key: js::PropName::Ident(state.mk_ident_name("length")),
                         value: Box::new(length_expr),
                     },
                 )))],
@@ -1988,7 +1997,7 @@ fn handle_range_expr(
                 span: DUMMY_SP,
                 props: vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
                     js::KeyValueProp {
-                        key: js::PropName::Ident(state.mk_ident("length")),
+                        key: js::PropName::Ident(state.mk_ident_name("length")),
                         value: Box::new(end_js),
                     },
                 )))],
