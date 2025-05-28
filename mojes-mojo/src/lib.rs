@@ -133,7 +133,7 @@ impl TranspilerState {
     }
 
     pub fn mk_str_lit(&self, value: &str) -> js::Expr {
-        self.mk_str_lit_single_quote(value)
+        self.mk_str_lit_double_quote(value)
     }
 
     pub fn mk_str_lit_double_quote(&self, value: &str) -> js::Expr {
