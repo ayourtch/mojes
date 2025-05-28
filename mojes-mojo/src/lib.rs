@@ -38,6 +38,24 @@ impl TranspilerState {
             temp_var_counter: 0,
         }
     }
+    pub fn expr_to_assign_target(&self, expr: js::Expr) -> Result<js::AssignTarget, String> {
+        match expr {
+            js::Expr::Ident(ident) => Ok(js::AssignTarget::Simple(js::SimpleAssignTarget::Ident(
+                js::BindingIdent {
+                    id: ident,
+                    type_ann: None,
+                },
+            ))),
+            js::Expr::Member(member) => Ok(js::AssignTarget::Simple(
+                js::SimpleAssignTarget::Member(member),
+            )),
+            js::Expr::This(_) => Err("Cannot assign to 'this'".to_string()),
+            _ => Err("Unsupported assignment target expression".to_string()),
+        }
+    }
+    pub fn mk_ident_name(&self, name: &str) -> js::IdentName {
+        js::IdentName::new(name.into(), DUMMY_SP)
+    }
 
     pub fn enter_scope(&mut self) {
         self.scope_stack.push(HashMap::new());
@@ -139,7 +157,7 @@ impl TranspilerState {
         js::Expr::Member(js::MemberExpr {
             span: DUMMY_SP,
             obj: Box::new(obj),
-            prop: js::MemberProp::Ident(self.mk_ident(prop)),
+            prop: js::MemberProp::Ident(self.mk_ident_name(prop)),
         })
     }
 
@@ -346,17 +364,15 @@ fn generate_js_method(
         )
     } else {
         // Instance method: StructName.prototype.methodName
-        let prototype = state.mk_member_expr(
-            js::Expr::Ident(state.mk_ident(struct_name)),
-            "prototype",
-        );
+        let prototype =
+            state.mk_member_expr(js::Expr::Ident(state.mk_ident(struct_name)), "prototype");
         state.mk_member_expr(prototype, &method_name)
     };
 
     let assignment = js::Expr::Assign(js::AssignExpr {
         span: DUMMY_SP,
         op: js::AssignOp::Assign,
-        left: js::PatOrExpr::Expr(Box::new(target)),
+        left: state.expr_to_assign_target(target)?,
         right: Box::new(js::Expr::Fn(js::FnExpr {
             ident: None,
             function: Box::new(function),
@@ -582,7 +598,7 @@ pub fn rust_expr_to_js(expr: &Expr, state: &mut TranspilerState) -> Result<js::E
             Ok(js::Expr::Assign(js::AssignExpr {
                 span: DUMMY_SP,
                 op: js::AssignOp::Assign,
-                left: js::PatOrExpr::Expr(Box::new(left)),
+                left: state.expr_to_assign_target(left)?,
                 right: Box::new(right),
             }))
         }
@@ -1310,10 +1326,7 @@ pub fn generate_js_class_for_struct(input_struct: &ItemStruct) -> Result<js::Mod
         let assignment = js::Expr::Assign(js::AssignExpr {
             span: DUMMY_SP,
             op: js::AssignOp::Assign,
-            left: js::PatOrExpr::Expr(Box::new(state.mk_member_expr(
-                state.mk_this_expr(),
-                name,
-            ))),
+            left: state.expr_to_assign_target(state.mk_member_expr(state.mk_this_expr(), name))?,
             right: Box::new(js::Expr::Ident(state.mk_ident(name))),
         });
         constructor_body.push(state.mk_expr_stmt(assignment));
@@ -1581,7 +1594,7 @@ fn handle_for_expr(
     let for_stmt = js::Stmt::ForOf(js::ForOfStmt {
         span: DUMMY_SP,
         is_await: false,
-        left: js::VarDeclOrPat::VarDecl(Box::new(js::VarDecl {
+        left: js::VarDeclOrExpr::VarDecl(Box::new(js::VarDecl {
             span: DUMMY_SP,
             kind: js::VarDeclKind::Const,
             declare: false,
