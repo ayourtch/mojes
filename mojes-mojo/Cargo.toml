@@ -12,6 +12,7 @@ swc_ecma_ast = "*"
 swc_ecma_parser = "*"
 swc_ecma_codegen = "*"
 swc_ecma_visit = "*"
+swc_atoms = "*"
 
 
 [dev-dependencies]

@@ -892,6 +892,7 @@ dependencies = [
  "boa_engine",
  "proc-macro2",
  "quote",
+ "swc_atoms",
  "swc_common",
  "swc_ecma_ast",
  "swc_ecma_codegen",

@@ -259,8 +259,9 @@ impl TranspilerState {
             .map(|(i, part)| js::TplElement {
                 span: DUMMY_SP,
                 tail: i == parts.len() - 1,
-                cooked: Some(part.into()),
-                raw: None,
+                cooked: Some(part.clone().into()),
+                // AYXX: is this the correct way ?
+                raw: swc_atoms::Atom::new(part.to_string()),
             })
             .collect();
 
