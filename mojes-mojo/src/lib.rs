@@ -786,6 +786,88 @@ pub fn rust_expr_to_js_with_state(
     }
 }
 
+/// Complete the rust_expr_to_js_with_state function with remaining expression types
+pub fn rust_expr_to_js_with_state_complete(
+    expr: &Expr,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    match expr {
+        // Handle the patterns we already covered in the main function
+        Expr::Lit(_)
+        | Expr::Path(_)
+        | Expr::Binary(_)
+        | Expr::Unary(_)
+        | Expr::MethodCall(_)
+        | Expr::Call(_)
+        | Expr::Field(_)
+        | Expr::If(_)
+        | Expr::Block(_)
+        | Expr::Array(_)
+        | Expr::Index(_)
+        | Expr::Assign(_)
+        | Expr::Return(_)
+        | Expr::Macro(_) => rust_expr_to_js_with_state(expr, state),
+
+        // Handle additional expression types
+        Expr::While(while_expr) => handle_while_expr(while_expr, state),
+        Expr::ForLoop(for_expr) => handle_for_expr(for_expr, state),
+        Expr::Match(match_expr) => handle_match_expr(match_expr, state),
+        Expr::Loop(loop_expr) => handle_loop_expr(loop_expr, state),
+        Expr::Closure(closure) => handle_closure_expr(closure, state),
+        Expr::Struct(struct_expr) => handle_struct_expr(struct_expr, state),
+        Expr::Range(range_expr) => handle_range_expr(range_expr, state),
+
+        Expr::Paren(paren) => handle_paren_expr(paren, state),
+
+        Expr::Break(break_expr) => {
+            if let Some(value) = &break_expr.expr {
+                let value_js = rust_expr_to_js_with_state(value, state)?;
+                state.add_warning("Break with value requires special handling".to_string());
+                Ok(value_js)
+            } else {
+                state.add_warning("Break statement converted to undefined".to_string());
+                Ok(state.mk_undefined())
+            }
+        }
+
+        Expr::Continue(_) => {
+            state.add_warning("Continue statement converted to undefined".to_string());
+            Ok(state.mk_undefined())
+        }
+
+        Expr::Tuple(tuple) => {
+            // Convert tuple to array
+            let elements: Result<Vec<_>, _> = tuple
+                .elems
+                .iter()
+                .map(|elem| rust_expr_to_js_with_state(elem, state))
+                .collect();
+
+            let js_elements: Vec<Option<js::ExprOrSpread>> = elements?
+                .into_iter()
+                .map(|expr| {
+                    Some(js::ExprOrSpread {
+                        spread: None,
+                        expr: Box::new(expr),
+                    })
+                })
+                .collect();
+
+            Ok(js::Expr::Array(js::ArrayLit {
+                span: DUMMY_SP,
+                elems: js_elements,
+            }))
+        }
+
+        Expr::Paren(paren) => handle_paren_expr(paren, state),
+
+        _ => {
+            state.add_warning(format!("Unsupported expression type: {:?}", expr));
+            panic!("Unsupported expression type: {:?}", expr);
+        }
+    }
+}
+
 /// Handle async expressions
 fn handle_async_expr(
     async_expr: &syn::ExprAsync,
@@ -2716,88 +2798,6 @@ fn handle_range_expr(
                 span: DUMMY_SP,
                 elems: vec![],
             }))
-        }
-    }
-}
-
-/// Complete the rust_expr_to_js_with_state function with remaining expression types
-pub fn rust_expr_to_js_with_state_complete(
-    expr: &Expr,
-    state: &mut TranspilerState,
-) -> Result<js::Expr, String> {
-    match expr {
-        // Handle the patterns we already covered in the main function
-        Expr::Lit(_)
-        | Expr::Path(_)
-        | Expr::Binary(_)
-        | Expr::Unary(_)
-        | Expr::MethodCall(_)
-        | Expr::Call(_)
-        | Expr::Field(_)
-        | Expr::If(_)
-        | Expr::Block(_)
-        | Expr::Array(_)
-        | Expr::Index(_)
-        | Expr::Assign(_)
-        | Expr::Return(_)
-        | Expr::Macro(_) => rust_expr_to_js_with_state(expr, state),
-
-        // Handle additional expression types
-        Expr::While(while_expr) => handle_while_expr(while_expr, state),
-        Expr::ForLoop(for_expr) => handle_for_expr(for_expr, state),
-        Expr::Match(match_expr) => handle_match_expr(match_expr, state),
-        Expr::Loop(loop_expr) => handle_loop_expr(loop_expr, state),
-        Expr::Closure(closure) => handle_closure_expr(closure, state),
-        Expr::Struct(struct_expr) => handle_struct_expr(struct_expr, state),
-        Expr::Range(range_expr) => handle_range_expr(range_expr, state),
-
-        Expr::Paren(paren) => handle_paren_expr(paren, state),
-
-        Expr::Break(break_expr) => {
-            if let Some(value) = &break_expr.expr {
-                let value_js = rust_expr_to_js_with_state(value, state)?;
-                state.add_warning("Break with value requires special handling".to_string());
-                Ok(value_js)
-            } else {
-                state.add_warning("Break statement converted to undefined".to_string());
-                Ok(state.mk_undefined())
-            }
-        }
-
-        Expr::Continue(_) => {
-            state.add_warning("Continue statement converted to undefined".to_string());
-            Ok(state.mk_undefined())
-        }
-
-        Expr::Tuple(tuple) => {
-            // Convert tuple to array
-            let elements: Result<Vec<_>, _> = tuple
-                .elems
-                .iter()
-                .map(|elem| rust_expr_to_js_with_state(elem, state))
-                .collect();
-
-            let js_elements: Vec<Option<js::ExprOrSpread>> = elements?
-                .into_iter()
-                .map(|expr| {
-                    Some(js::ExprOrSpread {
-                        spread: None,
-                        expr: Box::new(expr),
-                    })
-                })
-                .collect();
-
-            Ok(js::Expr::Array(js::ArrayLit {
-                span: DUMMY_SP,
-                elems: js_elements,
-            }))
-        }
-
-        Expr::Paren(paren) => handle_paren_expr(paren, state),
-
-        _ => {
-            state.add_warning(format!("Unsupported expression type: {:?}", expr));
-            panic!("Unsupported expression type: {:?}", expr);
         }
     }
 }
