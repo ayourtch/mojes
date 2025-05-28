@@ -133,10 +133,22 @@ impl TranspilerState {
     }
 
     pub fn mk_str_lit(&self, value: &str) -> js::Expr {
+        self.mk_str_lit_single_quote(value)
+    }
+
+    pub fn mk_str_lit_double_quote(&self, value: &str) -> js::Expr {
         js::Expr::Lit(js::Lit::Str(js::Str {
             span: DUMMY_SP,
             value: value.into(),
             raw: None,
+        }))
+    }
+
+    pub fn mk_str_lit_single_quote(&self, value: &str) -> js::Expr {
+        js::Expr::Lit(js::Lit::Str(js::Str {
+            span: DUMMY_SP,
+            value: value.into(),
+            raw: Some(swc_atoms::Atom::new(format!("'{}'", value))),
         }))
     }
 

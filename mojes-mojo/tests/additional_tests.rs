@@ -171,6 +171,7 @@ fn test_enum_with_data() {
     };
 
     let js_enum = generate_js_enum(&enum_def);
+    println!("DEBUG test_enum_with_data js code: {}", &js_enum);
     assert!(js_enum.contains("const Message"));
     assert!(js_enum.contains("Quit: 'Quit'"));
     assert!(js_enum.contains("Move("));
