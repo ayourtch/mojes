@@ -1132,8 +1132,26 @@ fn handle_format_macro_with_state(
             if let syn::Lit::Str(str_lit) = &lit.lit {
                 let format_str = str_lit.value();
 
+                /* This will return just the quotes:
+
+                                if !format_str.contains("{}") {
+                                    return Ok(state.mk_str_lit(&format_str));
+                                }
+                */
+
+                /* this will return the empty template (backticks): */
+
                 if !format_str.contains("{}") {
-                    return Ok(state.mk_str_lit(&format_str));
+                    return Ok(js::Expr::Tpl(js::Tpl {
+                        span: DUMMY_SP,
+                        exprs: vec![],
+                        quasis: vec![js::TplElement {
+                            span: DUMMY_SP,
+                            tail: true,
+                            cooked: Some(format_str.clone().into()),
+                            raw: swc_atoms::Atom::new(format_str.to_string()),
+                        }],
+                    }));
                 }
 
                 // Get format arguments
