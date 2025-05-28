@@ -929,6 +929,12 @@ pub fn rust_block_to_js_with_state(
                         let for_stmt = convert_for_to_stmt_enhanced(for_expr, state)?;
                         js_stmts.push(for_stmt);
                     }
+                    Expr::While(while_expr) => {
+                        // Generate direct statement
+                        let while_stmt =
+                            convert_while_to_stmt_legacy_compatible(while_expr, state)?;
+                        js_stmts.push(while_stmt);
+                    }
                     Expr::If(if_expr) => {
                         // Generate direct statement
                         let if_stmt = convert_if_to_stmt(block_action, if_expr, state)?;
@@ -2642,15 +2648,15 @@ pub fn transpile_enum_to_js(input_enum: &ItemEnum) -> Result<String, String> {
     ast_to_code(&module_items)
 }
 
-/// Handle while loops
-fn handle_while_expr(
+/// Core function that converts Rust while loop to JavaScript while statement
+fn convert_while_to_stmt(
     while_expr: &syn::ExprWhile,
     state: &mut TranspilerState,
-) -> Result<js::Expr, String> {
+) -> Result<js::Stmt, String> {
     let test = rust_expr_to_js_with_state(&while_expr.cond, state)?;
     let body_stmts = rust_block_to_js_with_state(BlockAction::NoReturn, &while_expr.body, state)?;
 
-    let while_stmt = js::Stmt::While(js::WhileStmt {
+    Ok(js::Stmt::While(js::WhileStmt {
         span: DUMMY_SP,
         test: Box::new(test),
         body: Box::new(js::Stmt::Block(js::BlockStmt {
@@ -2658,9 +2664,253 @@ fn handle_while_expr(
             stmts: body_stmts,
             ctxt: SyntaxContext::empty(),
         })),
-    });
+    }))
+}
 
+/// Core function that converts Rust while-let loop to JavaScript while statement
+fn convert_while_let_to_stmt(
+    while_expr: &syn::ExprWhile,
+    let_expr: &syn::ExprLet, // The let condition
+    state: &mut TranspilerState,
+) -> Result<js::Stmt, String> {
+    // Handle while let Some(x) = expr { ... } patterns
+    let (condition, mut binding_stmts) =
+        handle_pattern_binding(&let_expr.pat, "_while_temp", state)?;
+    let matched_expr = rust_expr_to_js_with_state(&let_expr.expr, state)?;
+    let body_stmts = rust_block_to_js_with_state(BlockAction::NoReturn, &while_expr.body, state)?;
+
+    // Create: while (condition) { let x = temp; ...body }
+    let mut while_body_stmts = vec![
+        // const _while_temp = matched_expr;
+        state.mk_var_decl("_while_temp", Some(matched_expr.clone()), true),
+    ];
+
+    // Add the pattern binding statements
+    while_body_stmts.extend(binding_stmts.clone());
+
+    // Add the original body
+    while_body_stmts.extend(body_stmts.clone());
+
+    // For while let, we need to re-evaluate the condition in each iteration
+    // Convert to: while (true) { const temp = expr; if (!condition) break; bindings; body; }
+    let mut loop_body = vec![
+        state.mk_var_decl("_while_temp", Some(matched_expr), true),
+        js::Stmt::If(js::IfStmt {
+            span: DUMMY_SP,
+            test: Box::new(js::Expr::Unary(js::UnaryExpr {
+                span: DUMMY_SP,
+                op: js::UnaryOp::Bang,
+                arg: Box::new(condition),
+            })),
+            cons: Box::new(js::Stmt::Break(js::BreakStmt {
+                span: DUMMY_SP,
+                label: None,
+            })),
+            alt: None,
+        }),
+    ];
+
+    // Add bindings and body
+    loop_body.extend(binding_stmts);
+    loop_body.extend(body_stmts);
+
+    Ok(js::Stmt::While(js::WhileStmt {
+        span: DUMMY_SP,
+        test: Box::new(state.mk_bool_lit(true)),
+        body: Box::new(js::Stmt::Block(js::BlockStmt {
+            span: DUMMY_SP,
+            stmts: loop_body,
+            ctxt: SyntaxContext::empty(),
+        })),
+    }))
+}
+
+/// Enhanced while converter that detects while-let patterns
+fn convert_while_to_stmt_enhanced(
+    while_expr: &syn::ExprWhile,
+    state: &mut TranspilerState,
+) -> Result<js::Stmt, String> {
+    // Check if this is a while-let pattern
+    if let Expr::Let(let_expr) = &*while_expr.cond {
+        return convert_while_let_to_stmt(while_expr, let_expr, state);
+    }
+
+    // Regular while loop
+    convert_while_to_stmt(while_expr, state)
+}
+
+/// Modified handle_while_expr that reuses the core logic
+fn handle_while_expr(
+    while_expr: &syn::ExprWhile,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    // Reuse the statement converter and wrap in IIFE
+    let while_stmt = convert_while_to_stmt_enhanced(while_expr, state)?;
     Ok(state.mk_iife(vec![while_stmt]))
+}
+
+/// Handle while-let specifically for Option patterns (like the legacy code)
+fn convert_while_let_option_to_stmt(
+    while_expr: &syn::ExprWhile,
+    let_expr: &syn::ExprLet,
+    state: &mut TranspilerState,
+) -> Result<js::Stmt, String> {
+    // Check if this is specifically "while let Some(x) = ..." pattern
+    if let Pat::TupleStruct(tuple_struct) = &*let_expr.pat {
+        if let Some(segment) = tuple_struct.path.segments.last() {
+            if segment.ident == "Some" {
+                let matched_expr = rust_expr_to_js_with_state(&let_expr.expr, state)?;
+                let body_stmts =
+                    rust_block_to_js_with_state(BlockAction::NoReturn, &while_expr.body, state)?;
+
+                // Extract variable name from Some(x) pattern
+                let var_name = if let Some(inner_pat) = tuple_struct.elems.first() {
+                    if let Pat::Ident(pat_ident) = inner_pat {
+                        Some(pat_ident.ident.to_string())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                // Generate optimized JavaScript:
+                // while (true) {
+                //   const _temp = expr;
+                //   if (_temp === null || _temp === undefined) break;
+                //   const x = _temp;  // if variable binding exists
+                //   // body
+                // }
+                let mut loop_body = vec![
+                    state.mk_var_decl("_temp", Some(matched_expr), true),
+                    // if (_temp === null || _temp === undefined) break;
+                    js::Stmt::If(js::IfStmt {
+                        span: DUMMY_SP,
+                        test: Box::new({
+                            let null_check = state.mk_binary_expr(
+                                js::Expr::Ident(state.mk_ident("_temp")),
+                                js::BinaryOp::EqEqEq,
+                                state.mk_null_lit(),
+                            );
+                            let undefined_check = state.mk_binary_expr(
+                                js::Expr::Ident(state.mk_ident("_temp")),
+                                js::BinaryOp::EqEqEq,
+                                state.mk_undefined(),
+                            );
+                            state.mk_binary_expr(
+                                null_check,
+                                js::BinaryOp::LogicalOr,
+                                undefined_check,
+                            )
+                        }),
+                        cons: Box::new(js::Stmt::Break(js::BreakStmt {
+                            span: DUMMY_SP,
+                            label: None,
+                        })),
+                        alt: None,
+                    }),
+                ];
+
+                // Add variable binding if present
+                if let Some(var_name) = var_name {
+                    let js_var_name = escape_js_identifier(&var_name);
+                    state.declare_variable(var_name, js_var_name.clone(), false);
+                    loop_body.push(state.mk_var_decl(
+                        &js_var_name,
+                        Some(js::Expr::Ident(state.mk_ident("_temp"))),
+                        true,
+                    ));
+                }
+
+                // Add the original body
+                loop_body.extend(body_stmts);
+
+                return Ok(js::Stmt::While(js::WhileStmt {
+                    span: DUMMY_SP,
+                    test: Box::new(state.mk_bool_lit(true)),
+                    body: Box::new(js::Stmt::Block(js::BlockStmt {
+                        span: DUMMY_SP,
+                        stmts: loop_body,
+                        ctxt: SyntaxContext::empty(),
+                    })),
+                }));
+            }
+        }
+    }
+
+    // Fall back to generic while-let handling
+    convert_while_let_to_stmt(while_expr, let_expr, state)
+}
+
+/// Most sophisticated version with all optimizations from legacy code
+fn convert_while_to_stmt_legacy_compatible(
+    while_expr: &syn::ExprWhile,
+    state: &mut TranspilerState,
+) -> Result<js::Stmt, String> {
+    // Check for while-let patterns first
+    if let Expr::Let(let_expr) = &*while_expr.cond {
+        return convert_while_let_option_to_stmt(while_expr, let_expr, state);
+    }
+
+    // Regular while loop - but with potential optimizations
+    let test = rust_expr_to_js_with_state(&while_expr.cond, state)?;
+    let body_stmts = rust_block_to_js_with_state(BlockAction::NoReturn, &while_expr.body, state)?;
+
+    // Check for infinite loop patterns like while true
+    let is_infinite = match &*while_expr.cond {
+        Expr::Lit(lit) => {
+            if let syn::Lit::Bool(bool_lit) = &lit.lit {
+                bool_lit.value
+            } else {
+                false
+            }
+        }
+        Expr::Path(path) => {
+            if let Some(segment) = path.path.segments.last() {
+                segment.ident == "true"
+            } else {
+                false
+            }
+        }
+        _ => false,
+    };
+
+    if is_infinite {
+        // Convert while true to while (true) - cleaner than while (true === true)
+        Ok(js::Stmt::While(js::WhileStmt {
+            span: DUMMY_SP,
+            test: Box::new(state.mk_bool_lit(true)),
+            body: Box::new(js::Stmt::Block(js::BlockStmt {
+                span: DUMMY_SP,
+                stmts: body_stmts,
+                ctxt: SyntaxContext::empty(),
+            })),
+        }))
+    } else {
+        // Regular while condition
+        Ok(js::Stmt::While(js::WhileStmt {
+            span: DUMMY_SP,
+            test: Box::new(test),
+            body: Box::new(js::Stmt::Block(js::BlockStmt {
+                span: DUMMY_SP,
+                stmts: body_stmts,
+                ctxt: SyntaxContext::empty(),
+            })),
+        }))
+    }
+}
+
+/// Context-aware wrapper that chooses between statement and expression handling
+pub fn handle_while_context_aware(
+    while_expr: &syn::ExprWhile,
+    state: &mut TranspilerState,
+    in_statement_context: bool,
+) -> Result<Either<js::Stmt, js::Expr>, String> {
+    if in_statement_context {
+        convert_while_to_stmt_legacy_compatible(while_expr, state).map(Either::Left)
+    } else {
+        handle_while_expr(while_expr, state).map(Either::Right)
+    }
 }
 
 /// Core function that converts Rust for loop to JavaScript for-of statement

@@ -230,6 +230,7 @@ fn test_while_loops_2() {
     let js_code = rust_expr_to_js(&expr);
     println!("DEBUG test_while_loops js code: {}", &js_code);
     assert!(js_code.contains("while"));
+    assert_eq!(js_code.matches("call(this)").count(), 1);
 }
 
 #[test]
