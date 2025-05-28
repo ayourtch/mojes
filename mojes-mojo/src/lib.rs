@@ -1072,7 +1072,7 @@ fn handle_local_statement(
     if let Some(init) = &local.init {
         let init_expr = rust_expr_to_js(&init.expr, state)?;
 
-        match &*local.pat {
+        match &local.pat {
             Pat::Ident(pat_ident) => {
                 let var_name = pat_ident.ident.to_string();
                 let js_var_name = escape_js_identifier(&var_name);
@@ -1131,7 +1131,7 @@ fn handle_local_statement(
         }
     } else {
         // Variable declaration without initialization
-        if let Pat::Ident(pat_ident) = &*local.pat {
+        if let Pat::Ident(pat_ident) = &local.pat {
             let var_name = pat_ident.ident.to_string();
             let js_var_name = escape_js_identifier(&var_name);
             let is_mutable = pat_ident.mutability.is_some();
@@ -1353,11 +1353,29 @@ pub fn generate_js_class_for_struct(input_struct: &ItemStruct) -> Result<js::Mod
         constructor_body.push(state.mk_expr_stmt(assignment));
     }
 
-    // Create constructor method
+    let constructor_params_converted: Vec<js::ParamOrTsParamProp> = constructor_params
+        .into_iter()
+        .map(|pat| {
+            js::ParamOrTsParamProp::TsParamProp(js::TsParamProp {
+                span: DUMMY_SP,
+                decorators: vec![],
+                accessibility: None,
+                readonly: false,
+                param: js::TsParamPropParam::Ident(match pat {
+                    js::Pat::Ident(binding_ident) => binding_ident,
+                    _ => js::BindingIdent {
+                        id: state.mk_ident("param"),
+                        type_ann: None,
+                    },
+                }),
+            })
+        })
+        .collect();
+
     let constructor = js::Constructor {
         span: DUMMY_SP,
         key: js::PropName::Ident(state.mk_ident_name("constructor")),
-        params: constructor_params,
+        params: constructor_params_converted,
         body: Some(js::BlockStmt {
             span: DUMMY_SP,
             stmts: constructor_body,
@@ -1365,6 +1383,7 @@ pub fn generate_js_class_for_struct(input_struct: &ItemStruct) -> Result<js::Mod
         }),
         accessibility: None,
         is_optional: false,
+        ctxt: SyntaxContext::empty(),
     };
 
     // Create class
