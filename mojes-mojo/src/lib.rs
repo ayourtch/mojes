@@ -1800,7 +1800,16 @@ pub fn ast_to_code_compact(module_items: &[js::ModuleItem]) -> Result<String, St
         .emit_module(&module)
         .map_err(|e| format!("Codegen error: {}", e))?;
 
-    Ok(String::from_utf8(buf).map_err(|e| format!("UTF8 error: {}", e))?)
+    let code = String::from_utf8(buf).map_err(|e| format!("UTF8 error: {}", e))?;
+
+    // Post-process to ensure arrays are compact
+    let compact_code = code
+        .replace("[\n    ", "[")
+        .replace(",\n    ", ", ")
+        .replace("\n]", "]")
+        .replace(";\n", ";\n"); // Keep statement separators
+
+    Ok(compact_code)
 }
 
 /// Convert JavaScript AST to code string, trimmed of trailing semicolons and whitespace
