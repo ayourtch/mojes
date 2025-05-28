@@ -1305,6 +1305,54 @@ fn handle_local_statement(
                     ctxt: SyntaxContext::empty(),
                 }))))
             }
+            Pat::Struct(struct_pat) => {
+                // Handle struct destructuring: let Person { name, age } = person;
+                let field_names: Vec<String> = struct_pat
+                    .fields
+                    .iter()
+                    .filter_map(|field_pat| {
+                        if let syn::Member::Named(ident) = &field_pat.member {
+                            Some(ident.to_string())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                // Create object destructuring pattern
+                let destructure_pattern = js::Pat::Object(js::ObjectPat {
+                    span: DUMMY_SP,
+                    props: field_names
+                        .iter()
+                        .map(|name| {
+                            let js_name = escape_js_identifier(name);
+                            state.declare_variable(name.clone(), js_name.clone(), false);
+                            js::ObjectPatProp::KeyValue(js::KeyValuePatProp {
+                                key: js::PropName::Ident(state.mk_ident_name(name)),
+                                value: Box::new(js::Pat::Ident(js::BindingIdent {
+                                    id: state.mk_ident(&js_name),
+                                    type_ann: None,
+                                })),
+                            })
+                        })
+                        .collect(),
+                    optional: false,
+                    type_ann: None,
+                });
+
+                Ok(js::Stmt::Decl(js::Decl::Var(Box::new(js::VarDecl {
+                    span: DUMMY_SP,
+                    kind: js::VarDeclKind::Const,
+                    declare: false,
+                    decls: vec![js::VarDeclarator {
+                        span: DUMMY_SP,
+                        name: destructure_pattern,
+                        init: Some(Box::new(init_expr)),
+                        definite: false,
+                    }],
+                    ctxt: SyntaxContext::empty(),
+                }))))
+            }
             _ => panic!("Unsupported destructuring pattern {:?}", &local.pat),
         }
     } else {

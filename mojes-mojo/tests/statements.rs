@@ -131,6 +131,7 @@ fn test_destructuring_patterns() {
     };
 
     let js_code = rust_block_to_js(&block);
+    println!("DEBUG test_destructuring_patterns js code: {}", &js_code);
     assert!(js_code.contains("const { name, age } = person"));
 }
 
