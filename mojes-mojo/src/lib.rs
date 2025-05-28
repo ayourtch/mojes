@@ -260,10 +260,22 @@ impl TranspilerState {
             right: Box::new(right),
         })
     }
-
     pub fn mk_template_literal(&self, parts: Vec<String>, exprs: Vec<js::Expr>) -> js::Expr {
-        let parts_len = parts.len();
-        let quasis: Vec<js::TplElement> = parts
+        // Ensure we have the right number of parts vs expressions
+        // Template literals need parts.len() == exprs.len() + 1
+        let mut final_parts = parts;
+        let mut final_exprs = exprs;
+
+        // Adjust parts to match expressions + 1
+        while final_parts.len() < final_exprs.len() + 1 {
+            final_parts.push("".to_string());
+        }
+        while final_parts.len() > final_exprs.len() + 1 {
+            final_parts.pop();
+        }
+
+        let parts_len = final_parts.len();
+        let quasis: Vec<js::TplElement> = final_parts
             .into_iter()
             .enumerate()
             .map(|(i, part)| js::TplElement {
@@ -276,7 +288,7 @@ impl TranspilerState {
 
         js::Expr::Tpl(js::Tpl {
             span: DUMMY_SP,
-            exprs: exprs.into_iter().map(Box::new).collect(),
+            exprs: final_exprs.into_iter().map(Box::new).collect(),
             quasis,
         })
     }
@@ -2262,8 +2274,11 @@ pub fn handle_format_macro(args: &Punctuated<Expr, Comma>) -> String {
     let code =
         ast_to_code(&module_items).expect("Failed to convert format macro to JavaScript code");
 
-    // Extract just the expression part, removing the trailing semicolon
-    code.trim_end_matches(';').to_string()
+    // Extract just the expression part, removing the trailing semicolon and whitespace
+    code.trim_end_matches('\n')
+        .trim_end()
+        .trim_end_matches(';')
+        .to_string()
 }
 
 /// Convert Rust block to JavaScript (old API)
@@ -2297,8 +2312,11 @@ pub fn rust_expr_to_js(expr: &Expr) -> String {
     let code =
         ast_to_code(&module_items).expect("Failed to convert expression AST to JavaScript code");
 
-    // Extract just the expression part, removing the trailing semicolon
-    code.trim_end_matches(';').to_string()
+    // Extract just the expression part, removing the trailing semicolon and whitespace
+    code.trim_end_matches('\n')
+        .trim_end()
+        .trim_end_matches(';')
+        .to_string()
 }
 
 /// Generate JavaScript class for struct (old API)
