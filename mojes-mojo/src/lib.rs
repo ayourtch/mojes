@@ -59,7 +59,7 @@ impl TranspilerState {
                 js::SimpleAssignTarget::Member(member),
             )),
             js::Expr::This(_) => Err("Cannot assign to 'this'".to_string()),
-            _ => Err("Unsupported assignment target expression".to_string()),
+            _ => panic!("Unsupported assignment target expression: {:?}", &expr),
         }
     }
     pub fn mk_ident_name(&self, name: &str) -> js::IdentName {
@@ -455,6 +455,7 @@ pub fn rust_block_to_js_with_state(
             }
             _ => {
                 state.add_warning(format!("Unsupported statement type: {:?}", stmt));
+                panic!("Unsupported statement type: {:?}", stmt);
             }
         }
     }
@@ -497,7 +498,7 @@ pub fn rust_expr_to_js_with_state(
             }
             syn::Lit::Bool(b) => Ok(state.mk_bool_lit(b.value())),
             syn::Lit::Char(c) => Ok(state.mk_str_lit(&c.value().to_string())),
-            _ => Err("Unsupported literal type".to_string()),
+            _ => panic!("Unsupported literal type: {:?}", &lit),
         },
 
         // Handle reference expressions
@@ -581,7 +582,7 @@ pub fn rust_expr_to_js_with_state(
                     syn::BinOp::Ne(_) => js::BinaryOp::NotEqEq,
                     syn::BinOp::Ge(_) => js::BinaryOp::GtEq,
                     syn::BinOp::Gt(_) => js::BinaryOp::Gt,
-                    _ => return Err("Unsupported binary operator".to_string()),
+                    _ => panic!("Unsupported binary operator {:?}", &bin.op),
                 };
 
                 Ok(state.mk_binary_expr(left, js_op, right))
@@ -595,7 +596,7 @@ pub fn rust_expr_to_js_with_state(
                 syn::UnOp::Not(_) => js::UnaryOp::Bang,
                 syn::UnOp::Neg(_) => js::UnaryOp::Minus,
                 syn::UnOp::Deref(_) => return Ok(operand), // Dereference is no-op in JS
-                _ => return Err("Unsupported unary operator".to_string()),
+                _ => panic!("Unsupported unary operator {:?}", &unary.op),
             };
 
             Ok(js::Expr::Unary(js::UnaryExpr {
@@ -710,8 +711,7 @@ pub fn rust_expr_to_js_with_state(
         Expr::Paren(paren) => handle_paren_expr(paren, state),
 
         _ => {
-            state.add_error(format!("Unsupported expression type: {:?}", expr));
-            Ok(state.mk_str_lit(&format!("/* Unsupported expression: {:?} */", &expr)))
+            panic!("Unsupported expression type: {:?}", expr);
         }
     }
 }
@@ -1075,7 +1075,7 @@ fn handle_macro_expr(mac: &syn::Macro, state: &mut TranspilerState) -> Result<js
                 }))
             }
         }
-        _ => Err(format!("Unsupported macro: {}", macro_name)),
+        _ => panic!("Unsupported macro: {}", macro_name),
     }
 }
 
@@ -1289,7 +1289,7 @@ fn handle_local_statement(
                     ctxt: SyntaxContext::empty(),
                 }))))
             }
-            _ => Err("Unsupported destructuring pattern".to_string()),
+            _ => panic!("Unsupported destructuring pattern {:?}", &local.pat),
         }
     } else {
         // Variable declaration without initialization
@@ -1302,7 +1302,7 @@ fn handle_local_statement(
 
             Ok(state.mk_var_decl(&js_var_name, None, false)) // Always use let for uninitialized
         } else {
-            Err("Unsupported variable pattern".to_string())
+            panic!("Unsupported variable pattern {:?}", &local.pat)
         }
     }
 }
@@ -1805,7 +1805,7 @@ fn handle_for_expr(
     let loop_var = if let Pat::Ident(pat_ident) = &*for_expr.pat {
         pat_ident.ident.to_string()
     } else {
-        return Err("Unsupported for loop pattern".to_string());
+        panic!("Unsupported for loop pattern {:?}", &*for_expr.pat);
     };
 
     let js_loop_var = escape_js_identifier(&loop_var);
@@ -1872,7 +1872,7 @@ fn handle_pattern_binding(
                 }
                 syn::Lit::Bool(b) => state.mk_bool_lit(b.value()),
                 syn::Lit::Char(c) => state.mk_str_lit(&c.value().to_string()),
-                _ => return Err("Unsupported literal in pattern".to_string()),
+                x => panic!("Unsupported literal in pattern {:?}", x),
             };
 
             state.mk_binary_expr(
@@ -1966,13 +1966,16 @@ fn handle_pattern_binding(
 
                     state.mk_binary_expr(not_null, js::BinaryOp::LogicalAnd, not_undefined)
                 } else {
-                    return Err("Unsupported tuple struct pattern".to_string());
+                    panic!("Unsupported tuple struct ident {:?}", &segment);
                 }
             } else {
-                return Err("Invalid tuple struct pattern".to_string());
+                panic!(
+                    "Unsupported tuple struct last segment {:?}",
+                    &tuple_struct.path.segments
+                );
             }
         }
-        _ => return Err("Unsupported pattern".to_string()),
+        x => panic!("Unsupported pattern {:?}", &x),
     };
 
     Ok((condition, binding_stmts))
@@ -2054,7 +2057,7 @@ fn create_match_condition(
                 }
                 syn::Lit::Bool(b) => state.mk_bool_lit(b.value()),
                 syn::Lit::Char(c) => state.mk_str_lit(&c.value().to_string()),
-                _ => return Err("Unsupported literal in match pattern".to_string()),
+                x => panic!("Unsupported literal in match pattern: {:?}", x),
             };
 
             Ok(state.mk_binary_expr(
@@ -2137,13 +2140,16 @@ fn create_match_condition(
 
                     Ok(state.mk_binary_expr(not_null, js::BinaryOp::LogicalAnd, not_undefined))
                 } else {
-                    Err("Unsupported tuple struct pattern".to_string())
+                    panic!("Unsupported tuple struct pattern {:?}", &segment);
                 }
             } else {
-                Err("Invalid tuple struct pattern".to_string())
+                panic!(
+                    "Invalid tuple struct pattern {:?}",
+                    &tuple_struct.path.segments
+                )
             }
         }
-        _ => Err("Unsupported match pattern".to_string()),
+        x => panic!("Unsupported match pattern {:?}", &x),
     }
 }
 
@@ -2366,9 +2372,10 @@ fn handle_range_expr(
 
             Ok(state.mk_call_expr(array_from, vec![length_obj, js::Expr::Arrow(arrow_fn)]))
         }
-        _ => {
+        x => {
             // Other range types not easily representable
             state.add_warning("Infinite or complex ranges not fully supported".to_string());
+            panic!("Infinite or complex ranges not fully supported: {:?}", x);
             Ok(js::Expr::Array(js::ArrayLit {
                 span: DUMMY_SP,
                 elems: vec![],
@@ -2454,7 +2461,7 @@ pub fn rust_expr_to_js_with_state_complete(
 
         _ => {
             state.add_warning(format!("Unsupported expression type: {:?}", expr));
-            Ok(state.mk_str_lit("/* Unsupported expression */"))
+            panic!("Unsupported expression type: {:?}", expr);
         }
     }
 }
