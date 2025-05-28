@@ -1852,7 +1852,9 @@ fn handle_match_expr(
     state: &mut TranspilerState,
 ) -> Result<js::Expr, String> {
     let match_value = rust_expr_to_js_with_state(&match_expr.expr, state)?;
-    let temp_var = state.generate_temp_var();
+    // Arguably the below is better but for now we keep compatible with old
+    // let temp_var = state.generate_temp_var();
+    let temp_var = "_match_value".to_string();
 
     let mut stmts = vec![state.mk_var_decl(&temp_var, Some(match_value), true)];
 
