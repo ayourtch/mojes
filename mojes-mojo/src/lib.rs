@@ -674,7 +674,7 @@ pub fn rust_expr_to_js_with_state(
 
         _ => {
             state.add_warning(format!("Unsupported expression type: {:?}", expr));
-            Ok(state.mk_str_lit("/* Unsupported expression */"))
+            Ok(state.mk_str_lit(&format!("/* Unsupported expression: {:?} */", &expr)))
         }
     }
 }
