@@ -204,8 +204,40 @@ impl TranspilerState {
             ctxt: SyntaxContext::empty(),
         })
     }
-
     pub fn mk_iife(&self, stmts: Vec<js::Stmt>) -> js::Expr {
+        self.mk_iife_with_this_context(stmts)
+    }
+
+    pub fn mk_iife_with_this_context(&self, stmts: Vec<js::Stmt>) -> js::Expr {
+        let body = js::BlockStmt {
+            span: DUMMY_SP,
+            stmts,
+            ctxt: SyntaxContext::empty(),
+        };
+
+        let arrow_fn = js::ArrowExpr {
+            span: DUMMY_SP,
+            params: vec![],
+            body: Box::new(js::BlockStmtOrExpr::BlockStmt(body)),
+            is_async: false,
+            is_generator: false,
+            type_params: None,
+            return_type: None,
+            ctxt: SyntaxContext::empty(),
+        };
+
+        // Wrap the arrow function in parentheses
+        let wrapped_arrow = js::Expr::Paren(js::ParenExpr {
+            span: DUMMY_SP,
+            expr: Box::new(js::Expr::Arrow(arrow_fn)),
+        });
+
+        // Use .call(this) instead of direct invocation
+        let call_expr = self.mk_member_expr(wrapped_arrow, "call");
+        self.mk_call_expr(call_expr, vec![self.mk_this_expr()])
+    }
+
+    pub fn mk_iife_without_context(&self, stmts: Vec<js::Stmt>) -> js::Expr {
         let body = js::BlockStmt {
             span: DUMMY_SP,
             stmts,
