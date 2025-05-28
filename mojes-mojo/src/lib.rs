@@ -1788,6 +1788,55 @@ pub fn generate_js_enum_with_state(input_enum: &ItemEnum) -> Result<js::ModuleIt
         }
     }
 
+    // Add isEnumName function (e.g., isMessage)
+    let is_function_name = format!("is{}", enum_name);
+    let is_function_body = js::BlockStmt {
+        span: DUMMY_SP,
+        stmts: vec![state.mk_return_stmt(Some(state.mk_binary_expr(
+            state.mk_binary_expr(
+                js::Expr::Ident(state.mk_ident("obj")),
+                js::BinaryOp::NotEqEq,
+                state.mk_null_lit(),
+            ),
+            js::BinaryOp::LogicalAnd,
+            state.mk_binary_expr(
+                js::Expr::Unary(js::UnaryExpr {
+                    span: DUMMY_SP,
+                    op: js::UnaryOp::TypeOf,
+                    arg: Box::new(js::Expr::Ident(state.mk_ident("obj"))),
+                }),
+                js::BinaryOp::EqEqEq,
+                state.mk_str_lit("object"),
+            ),
+        )))],
+        ctxt: SyntaxContext::empty(),
+    };
+
+    let is_function = js::Function {
+        params: vec![state.pat_to_param(js::Pat::Ident(js::BindingIdent {
+            id: state.mk_ident("obj"),
+            type_ann: None,
+        }))],
+        decorators: vec![],
+        span: DUMMY_SP,
+        body: Some(is_function_body),
+        is_generator: false,
+        is_async: false,
+        type_params: None,
+        return_type: None,
+        ctxt: SyntaxContext::empty(),
+    };
+
+    properties.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+        js::KeyValueProp {
+            key: js::PropName::Ident(state.mk_ident_name(&is_function_name)),
+            value: Box::new(js::Expr::Fn(js::FnExpr {
+                ident: None,
+                function: Box::new(is_function),
+            })),
+        },
+    ))));
+
     // Create the enum object
     let enum_obj = js::Expr::Object(js::ObjectLit {
         span: DUMMY_SP,
