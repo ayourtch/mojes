@@ -487,10 +487,16 @@ fn test_loop_with_break_continue() {
         }
     };
 
-    println!("DEBUG test_loop_with_break_continue parsed syn block: {:?}", &block);
+    println!(
+        "DEBUG test_loop_with_break_continue parsed syn block: {:?}",
+        &block
+    );
 
     let js_code = rust_block_to_js(&block);
-    println!("DEBUG test_loop_with_break_continue corresponding js code: {}", &js_code);
+    println!(
+        "DEBUG test_loop_with_break_continue corresponding js code: {}",
+        &js_code
+    );
     let result = eval_block_as_function(&js_code).unwrap();
     assert_eq!(result.as_number().unwrap(), 12.0); // 1+2+4+5
 }
@@ -699,9 +705,15 @@ fn test_complex_execution_flow() {
         js_code
     );
 
-    println!("DEBUG test_complex_execution_flow Wrapped code full javascript: {}", &wrapped_code);
+    println!(
+        "DEBUG test_complex_execution_flow Wrapped code full javascript: {}",
+        &wrapped_code
+    );
     let result = eval_js(&wrapped_code).unwrap();
-    println!("DEBUG test_complex_execution_flow wrapped code js parse result: {:?}", &result);
+    println!(
+        "DEBUG test_complex_execution_flow wrapped code js parse result: {:?}",
+        &result
+    );
     // Should return a string with the result
     assert!(result.is_string());
 }

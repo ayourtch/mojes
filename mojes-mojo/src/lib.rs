@@ -739,6 +739,47 @@ pub fn rust_expr_to_js_with_state(
         // Handle await expressions
         Expr::Await(await_expr) => handle_await_expr(await_expr, state),
 
+        // Handle if-let expressions
+        Expr::Let(let_expr) => {
+            // if let Some(value) = complex_option becomes a condition check
+            match &*let_expr.pat {
+                Pat::TupleStruct(tuple_struct) => {
+                    if let Some(segment) = tuple_struct.path.segments.last() {
+                        if segment.ident == "Some" {
+                            let expr_js = rust_expr_to_js_with_state(&let_expr.expr, state)?;
+                            // Check that value is not null/undefined
+                            let not_null = state.mk_binary_expr(
+                                expr_js.clone(),
+                                js::BinaryOp::NotEqEq,
+                                state.mk_null_lit(),
+                            );
+                            let not_undefined = state.mk_binary_expr(
+                                expr_js,
+                                js::BinaryOp::NotEqEq,
+                                state.mk_undefined(),
+                            );
+                            Ok(state.mk_binary_expr(
+                                not_null,
+                                js::BinaryOp::LogicalAnd,
+                                not_undefined,
+                            ))
+                        } else {
+                            panic!(
+                                "Unsupported tuple struct in let expression: {:?}",
+                                segment.ident
+                            );
+                        }
+                    } else {
+                        panic!(
+                            "Invalid tuple struct path in let expression: {:?}",
+                            tuple_struct.path
+                        );
+                    }
+                }
+                _ => panic!("Unsupported pattern in let expression: {:?}", let_expr.pat),
+            }
+        }
+
         _ => {
             panic!("Unsupported expression type: {:?}", expr);
         }
