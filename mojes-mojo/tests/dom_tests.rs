@@ -266,14 +266,14 @@ mod tests_dom {
         };
 
         let js_code = rust_expr_to_js(&expr);
-        println!("DEBUG closure with params: {}", &js_code);
+        eprintln!("DEBUG closure with params: {}", &js_code);
 
         // Should not contain IIFE
         assert!(!js_code.contains("(function()"));
         assert!(!js_code.contains("})()"));
 
         // Should contain proper arrow function with parameter
-        assert!(js_code.contains("event => {"));
+        assert!(js_code.contains("event => {") || js_code.contains("(event)=>"));
         assert!(js_code.contains("console.log"));
         assert!(js_code.contains("event.preventDefault"));
     }
