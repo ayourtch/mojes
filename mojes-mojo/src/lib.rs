@@ -262,15 +262,15 @@ impl TranspilerState {
     }
 
     pub fn mk_template_literal(&self, parts: Vec<String>, exprs: Vec<js::Expr>) -> js::Expr {
+        let parts_len = parts.len();
         let quasis: Vec<js::TplElement> = parts
             .into_iter()
             .enumerate()
             .map(|(i, part)| js::TplElement {
                 span: DUMMY_SP,
-                tail: i == parts.len() - 1,
+                tail: i == parts_len - 1,
                 cooked: Some(part.clone().into()),
-                // AYXX: is this the correct way ?
-                raw: swc_atoms::Atom::new(part.to_string()),
+                raw: swc_atoms::Atom::new(part),
             })
             .collect();
 
@@ -530,6 +530,7 @@ pub fn rust_expr_to_js(expr: &Expr, state: &mut TranspilerState) -> Result<js::E
                 syn::UnOp::Not(_) => js::UnaryOp::Bang,
                 syn::UnOp::Neg(_) => js::UnaryOp::Minus,
                 syn::UnOp::Deref(_) => return Ok(operand), // Dereference is no-op in JS
+                _ => return Err("Unsupported unary operator".to_string()),
             };
 
             Ok(js::Expr::Unary(js::UnaryExpr {
@@ -1055,7 +1056,7 @@ fn handle_format_macro(
         let joined = args_vec
             .into_iter()
             .reduce(|acc, expr| {
-                state.mk_binary_expr(acc, js::BinaryOp::Add, state.mk_str_lit(" "));
+                state.mk_binary_expr(acc.clone(), js::BinaryOp::Add, state.mk_str_lit(" "));
                 state.mk_binary_expr(acc, js::BinaryOp::Add, expr)
             })
             .unwrap_or_else(|| state.mk_str_lit(""));
@@ -1478,7 +1479,7 @@ pub fn generate_js_enum(input_enum: &ItemEnum) -> Result<js::ModuleItem, String>
                 };
 
                 let function = js::Function {
-                    params,
+                    params: params.into_iter().map(|p| state.pat_to_param(p)).collect(),
                     decorators: vec![],
                     span: DUMMY_SP,
                     body: Some(function_body),
@@ -1568,10 +1569,7 @@ pub fn ast_to_code(module_items: &[js::ModuleItem]) -> Result<String, String> {
         shebang: None,
     };
 
-    match swc_ecma_codegen::to_code(&module) {
-        Ok(code) => Ok(code),
-        Err(e) => Err(format!("Failed to generate code: {:?}", e)),
-    }
+    Ok(swc_ecma_codegen::to_code(&module))
 }
 
 /// Convenience function to transpile a complete impl block to JavaScript code
@@ -1637,7 +1635,7 @@ fn handle_for_expr(
     let for_stmt = js::Stmt::ForOf(js::ForOfStmt {
         span: DUMMY_SP,
         is_await: false,
-        left: js::VarDeclOrExpr::VarDecl(Box::new(js::VarDecl {
+        left: js::ForHead::VarDecl(Box::new(js::VarDecl {
             span: DUMMY_SP,
             kind: js::VarDeclKind::Const,
             declare: false,
@@ -1830,7 +1828,7 @@ fn create_match_condition(
 
 /// Helper function to chain if statements for match arms
 fn chain_if_statement(current: &mut js::Stmt, next: js::Stmt) {
-    if let js::Stmt::If(ref mut if_stmt) = current {
+    if let js::Stmt::If(if_stmt) = current {
         if if_stmt.alt.is_none() {
             if_stmt.alt = Some(Box::new(next));
         } else {
