@@ -728,10 +728,54 @@ pub fn rust_expr_to_js_with_state(
 
         Expr::Closure(closure) => handle_closure_expr(closure, state),
 
+        // Handle async expressions
+        Expr::Async(async_expr) => handle_async_expr(async_expr, state),
+
+        // Handle await expressions
+        Expr::Await(await_expr) => handle_await_expr(await_expr, state),
+
         _ => {
             panic!("Unsupported expression type: {:?}", expr);
         }
     }
+}
+
+/// Handle async expressions
+fn handle_async_expr(
+    async_expr: &syn::ExprAsync,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    let body_stmts = rust_block_to_js_with_state(&async_expr.block, state)?;
+
+    let async_fn = js::ArrowExpr {
+        span: DUMMY_SP,
+        params: vec![],
+        body: Box::new(js::BlockStmtOrExpr::BlockStmt(js::BlockStmt {
+            span: DUMMY_SP,
+            stmts: body_stmts,
+            ctxt: SyntaxContext::empty(),
+        })),
+        is_async: true,
+        is_generator: false,
+        type_params: None,
+        return_type: None,
+        ctxt: SyntaxContext::empty(),
+    };
+
+    Ok(js::Expr::Arrow(async_fn))
+}
+
+/// Handle await expressions
+fn handle_await_expr(
+    await_expr: &syn::ExprAwait,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    let base = rust_expr_to_js_with_state(&await_expr.base, state)?;
+
+    Ok(js::Expr::Await(js::AwaitExpr {
+        span: DUMMY_SP,
+        arg: Box::new(base),
+    }))
 }
 
 // Parenthesized expressions
