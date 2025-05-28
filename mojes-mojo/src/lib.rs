@@ -283,7 +283,7 @@ impl TranspilerState {
 }
 
 /// Generate JavaScript methods for a Rust impl block
-pub fn generate_js_methods_for_impl(input_impl: &ItemImpl) -> Result<Vec<js::ModuleItem>, String> {
+pub fn generate_js_methods_for_impl_with_state(input_impl: &ItemImpl) -> Result<Vec<js::ModuleItem>, String> {
     let mut state = TranspilerState::new();
 
     let struct_name = if let syn::Type::Path(type_path) = &*input_impl.self_ty {
@@ -351,7 +351,7 @@ fn generate_js_method(
         .collect();
 
     // Convert method body to JavaScript
-    let body_stmts = rust_block_to_js(&method.block, state)?;
+    let body_stmts = rust_block_to_js_with_state(&method.block, state)?;
     let body = js::BlockStmt {
         span: DUMMY_SP,
         stmts: body_stmts,
@@ -398,7 +398,7 @@ fn generate_js_method(
 }
 
 /// Convert Rust block to JavaScript statements
-pub fn rust_block_to_js(
+pub fn rust_block_to_js_with_state(
     block: &Block,
     state: &mut TranspilerState,
 ) -> Result<Vec<js::Stmt>, String> {
@@ -413,7 +413,7 @@ pub fn rust_block_to_js(
                 js_stmts.push(js_stmt);
             }
             Stmt::Expr(expr, semi) => {
-                let js_expr = rust_expr_to_js(expr, state)?;
+                let js_expr = rust_expr_to_js_with_state(expr, state)?;
 
                 if semi.is_some() {
                     // Expression with semicolon - treat as statement
@@ -438,7 +438,7 @@ pub fn rust_block_to_js(
 }
 
 /// Convert Rust expression to JavaScript expression
-pub fn rust_expr_to_js(expr: &Expr, state: &mut TranspilerState) -> Result<js::Expr, String> {
+pub fn rust_expr_to_js_with_state(expr: &Expr, state: &mut TranspilerState) -> Result<js::Expr, String> {
     match expr {
         // Handle literals
         Expr::Lit(lit) => match &lit.lit {
@@ -484,8 +484,8 @@ pub fn rust_expr_to_js(expr: &Expr, state: &mut TranspilerState) -> Result<js::E
 
         // Handle binary operations
         Expr::Binary(bin) => {
-            let left = rust_expr_to_js(&bin.left, state)?;
-            let right = rust_expr_to_js(&bin.right, state)?;
+            let left = rust_expr_to_js_with_state(&bin.left, state)?;
+            let right = rust_expr_to_js_with_state(&bin.right, state)?;
 
             let js_op = match &bin.op {
                 syn::BinOp::Add(_) => {
@@ -525,7 +525,7 @@ pub fn rust_expr_to_js(expr: &Expr, state: &mut TranspilerState) -> Result<js::E
 
         // Handle unary operations
         Expr::Unary(unary) => {
-            let operand = rust_expr_to_js(&unary.expr, state)?;
+            let operand = rust_expr_to_js_with_state(&unary.expr, state)?;
             let js_op = match &unary.op {
                 syn::UnOp::Not(_) => js::UnaryOp::Bang,
                 syn::UnOp::Neg(_) => js::UnaryOp::Minus,
@@ -548,7 +548,7 @@ pub fn rust_expr_to_js(expr: &Expr, state: &mut TranspilerState) -> Result<js::E
 
         // Handle field access
         Expr::Field(field) => {
-            let base = rust_expr_to_js(&field.base, state)?;
+            let base = rust_expr_to_js_with_state(&field.base, state)?;
             let member_name = match &field.member {
                 syn::Member::Named(ident) => ident.to_string(),
                 syn::Member::Unnamed(index) => index.index.to_string(),
@@ -562,7 +562,7 @@ pub fn rust_expr_to_js(expr: &Expr, state: &mut TranspilerState) -> Result<js::E
 
         // Handle block expressions
         Expr::Block(block_expr) => {
-            let stmts = rust_block_to_js(&block_expr.block, state)?;
+            let stmts = rust_block_to_js_with_state(&block_expr.block, state)?;
             Ok(state.mk_iife(stmts))
         }
 
@@ -571,7 +571,7 @@ pub fn rust_expr_to_js(expr: &Expr, state: &mut TranspilerState) -> Result<js::E
             let elements: Result<Vec<_>, _> = array
                 .elems
                 .iter()
-                .map(|elem| rust_expr_to_js(elem, state))
+                .map(|elem| rust_expr_to_js_with_state(elem, state))
                 .collect();
 
             let js_elements: Vec<Option<js::ExprOrSpread>> = elements?
@@ -592,8 +592,8 @@ pub fn rust_expr_to_js(expr: &Expr, state: &mut TranspilerState) -> Result<js::E
 
         // Handle index expressions
         Expr::Index(index) => {
-            let obj = rust_expr_to_js(&index.expr, state)?;
-            let prop = rust_expr_to_js(&index.index, state)?;
+            let obj = rust_expr_to_js_with_state(&index.expr, state)?;
+            let prop = rust_expr_to_js_with_state(&index.index, state)?;
 
             Ok(js::Expr::Member(js::MemberExpr {
                 span: DUMMY_SP,
@@ -607,8 +607,8 @@ pub fn rust_expr_to_js(expr: &Expr, state: &mut TranspilerState) -> Result<js::E
 
         // Handle assignments
         Expr::Assign(assign) => {
-            let left = rust_expr_to_js(&assign.left, state)?;
-            let right = rust_expr_to_js(&assign.right, state)?;
+            let left = rust_expr_to_js_with_state(&assign.left, state)?;
+            let right = rust_expr_to_js_with_state(&assign.right, state)?;
 
             Ok(js::Expr::Assign(js::AssignExpr {
                 span: DUMMY_SP,
@@ -621,7 +621,7 @@ pub fn rust_expr_to_js(expr: &Expr, state: &mut TranspilerState) -> Result<js::E
         // Handle return expressions
         Expr::Return(ret) => {
             if let Some(return_expr) = &ret.expr {
-                let js_expr = rust_expr_to_js(return_expr, state)?;
+                let js_expr = rust_expr_to_js_with_state(return_expr, state)?;
                 // Return expressions in JavaScript are statements, not expressions
                 // We'll handle this at the statement level
                 Ok(js_expr)
@@ -647,14 +647,14 @@ fn handle_method_call(
     method_call: &syn::ExprMethodCall,
     state: &mut TranspilerState,
 ) -> Result<js::Expr, String> {
-    let receiver = rust_expr_to_js(&method_call.receiver, state)?;
+    let receiver = rust_expr_to_js_with_state(&method_call.receiver, state)?;
     let method_name = method_call.method.to_string();
 
     // Convert arguments
     let args: Result<Vec<_>, _> = method_call
         .args
         .iter()
-        .map(|arg| rust_expr_to_js(arg, state))
+        .map(|arg| rust_expr_to_js_with_state(arg, state))
         .collect();
     let js_args = args?;
 
@@ -733,7 +733,7 @@ fn handle_function_call(
     let args: Result<Vec<_>, _> = call
         .args
         .iter()
-        .map(|arg| rust_expr_to_js(arg, state))
+        .map(|arg| rust_expr_to_js_with_state(arg, state))
         .collect();
     let js_args = args?;
 
@@ -758,7 +758,7 @@ fn handle_function_call(
                     }
                     "format" => {
                         // Handle format! macro as function call
-                        handle_format_macro(&call.args, state)
+                        handle_format_macro_with_state(&call.args, state)
                     }
                     "Some" => {
                         // Option::Some just returns the value in JavaScript
@@ -783,7 +783,7 @@ fn handle_function_call(
         }
         _ => {
             // Complex function expression
-            let callee = rust_expr_to_js(&call.func, state)?;
+            let callee = rust_expr_to_js_with_state(&call.func, state)?;
             Ok(state.mk_call_expr(callee, js_args))
         }
     }
@@ -791,8 +791,8 @@ fn handle_function_call(
 
 /// Handle if expressions
 fn handle_if_expr(if_expr: &syn::ExprIf, state: &mut TranspilerState) -> Result<js::Expr, String> {
-    let test = rust_expr_to_js(&if_expr.cond, state)?;
-    let consequent_stmts = rust_block_to_js(&if_expr.then_branch, state)?;
+    let test = rust_expr_to_js_with_state(&if_expr.cond, state)?;
+    let consequent_stmts = rust_block_to_js_with_state(&if_expr.then_branch, state)?;
 
     let mut if_stmts = vec![js::Stmt::If(js::IfStmt {
         span: DUMMY_SP,
@@ -808,14 +808,14 @@ fn handle_if_expr(if_expr: &syn::ExprIf, state: &mut TranspilerState) -> Result<
     // Handle else branch
     if let Some((_, else_branch)) = &if_expr.else_branch {
         let else_stmts = match &**else_branch {
-            Expr::Block(else_block) => rust_block_to_js(&else_block.block, state)?,
+            Expr::Block(else_block) => rust_block_to_js_with_state(&else_block.block, state)?,
             Expr::If(_) => {
                 // Handle else if
-                let else_if_expr = rust_expr_to_js(else_branch, state)?;
+                let else_if_expr = rust_expr_to_js_with_state(else_branch, state)?;
                 vec![state.mk_expr_stmt(else_if_expr)]
             }
             _ => {
-                let else_expr = rust_expr_to_js(else_branch, state)?;
+                let else_expr = rust_expr_to_js_with_state(else_branch, state)?;
                 vec![state.mk_return_stmt(Some(else_expr))]
             }
         };
@@ -1008,7 +1008,7 @@ fn handle_format_like_macro(
 }
 
 /// Handle format! macro with parsed arguments
-fn handle_format_macro(
+fn handle_format_macro_with_state(
     args: &Punctuated<Expr, Comma>,
     state: &mut TranspilerState,
 ) -> Result<js::Expr, String> {
@@ -1030,7 +1030,7 @@ fn handle_format_macro(
                 let format_args: Result<Vec<_>, _> = args
                     .iter()
                     .skip(1)
-                    .map(|arg| rust_expr_to_js(arg, state))
+                    .map(|arg| rust_expr_to_js_with_state(arg, state))
                     .collect();
                 let js_args = format_args?;
 
@@ -1046,7 +1046,7 @@ fn handle_format_macro(
     }
 
     // Fallback: concatenate arguments
-    let js_args: Result<Vec<_>, _> = args.iter().map(|arg| rust_expr_to_js(arg, state)).collect();
+    let js_args: Result<Vec<_>, _> = args.iter().map(|arg| rust_expr_to_js_with_state(arg, state)).collect();
 
     let args_vec = js_args?;
     if args_vec.len() == 1 {
@@ -1071,7 +1071,7 @@ fn handle_local_statement(
     state: &mut TranspilerState,
 ) -> Result<js::Stmt, String> {
     if let Some(init) = &local.init {
-        let init_expr = rust_expr_to_js(&init.expr, state)?;
+        let init_expr = rust_expr_to_js_with_state(&init.expr, state)?;
 
         match &local.pat {
             Pat::Ident(pat_ident) => {
@@ -1152,7 +1152,7 @@ fn parse_macro_tokens(tokens: &str, state: &mut TranspilerState) -> Result<js::E
 
     // Try to parse as a Rust expression first
     if let Ok(parsed_expr) = syn::parse_str::<syn::Expr>(trimmed) {
-        rust_expr_to_js(&parsed_expr, state)
+        rust_expr_to_js_with_state(&parsed_expr, state)
     } else {
         // Fallback to string literal
         Ok(state.mk_str_lit(trimmed))
@@ -1307,7 +1307,7 @@ pub fn escape_js_identifier(rust_ident: &str) -> String {
 }
 
 /// Generate JavaScript class for a Rust struct
-pub fn generate_js_class_for_struct(input_struct: &ItemStruct) -> Result<js::ModuleItem, String> {
+pub fn generate_js_class_for_struct_with_state(input_struct: &ItemStruct) -> Result<js::ModuleItem, String> {
     let mut state = TranspilerState::new();
     let struct_name = input_struct.ident.to_string();
 
@@ -1411,7 +1411,7 @@ pub fn generate_js_class_for_struct(input_struct: &ItemStruct) -> Result<js::Mod
 }
 
 /// Generate JavaScript enum
-pub fn generate_js_enum(input_enum: &ItemEnum) -> Result<js::ModuleItem, String> {
+pub fn generate_js_enum_with_state(input_enum: &ItemEnum) -> Result<js::ModuleItem, String> {
     let mut state = TranspilerState::new();
     let enum_name = input_enum.ident.to_string();
 
@@ -1574,19 +1574,19 @@ pub fn ast_to_code(module_items: &[js::ModuleItem]) -> Result<String, String> {
 
 /// Convenience function to transpile a complete impl block to JavaScript code
 pub fn transpile_impl_to_js(input_impl: &ItemImpl) -> Result<String, String> {
-    let module_items = generate_js_methods_for_impl(input_impl)?;
+    let module_items = generate_js_methods_for_impl_with_state(input_impl)?;
     ast_to_code(&module_items)
 }
 
 /// Convenience function to transpile a struct to JavaScript code
 pub fn transpile_struct_to_js(input_struct: &ItemStruct) -> Result<String, String> {
-    let module_item = generate_js_class_for_struct(input_struct)?;
+    let module_item = generate_js_class_for_struct_with_state(input_struct)?;
     ast_to_code(&[module_item])
 }
 
 /// Convenience function to transpile an enum to JavaScript code
 pub fn transpile_enum_to_js(input_enum: &ItemEnum) -> Result<String, String> {
-    let module_item = generate_js_enum(input_enum)?;
+    let module_item = generate_js_enum_with_state(input_enum)?;
     ast_to_code(&[module_item])
 }
 
@@ -1595,8 +1595,8 @@ fn handle_while_expr(
     while_expr: &syn::ExprWhile,
     state: &mut TranspilerState,
 ) -> Result<js::Expr, String> {
-    let test = rust_expr_to_js(&while_expr.cond, state)?;
-    let body_stmts = rust_block_to_js(&while_expr.body, state)?;
+    let test = rust_expr_to_js_with_state(&while_expr.cond, state)?;
+    let body_stmts = rust_block_to_js_with_state(&while_expr.body, state)?;
 
     let while_stmt = js::Stmt::While(js::WhileStmt {
         span: DUMMY_SP,
@@ -1626,10 +1626,10 @@ fn handle_for_expr(
     let js_loop_var = escape_js_identifier(&loop_var);
 
     // Convert the iterable expression
-    let iterable = rust_expr_to_js(&for_expr.expr, state)?;
+    let iterable = rust_expr_to_js_with_state(&for_expr.expr, state)?;
 
     // Convert loop body
-    let body_stmts = rust_block_to_js(&for_expr.body, state)?;
+    let body_stmts = rust_block_to_js_with_state(&for_expr.body, state)?;
 
     // Create for...of loop
     let for_stmt = js::Stmt::ForOf(js::ForOfStmt {
@@ -1666,7 +1666,7 @@ fn handle_match_expr(
     match_expr: &syn::ExprMatch,
     state: &mut TranspilerState,
 ) -> Result<js::Expr, String> {
-    let match_value = rust_expr_to_js(&match_expr.expr, state)?;
+    let match_value = rust_expr_to_js_with_state(&match_expr.expr, state)?;
     let temp_var = state.generate_temp_var();
 
     let mut stmts = vec![state.mk_var_decl(&temp_var, Some(match_value), true)];
@@ -1675,7 +1675,7 @@ fn handle_match_expr(
 
     for (i, arm) in match_expr.arms.iter().enumerate() {
         let condition = create_match_condition(&arm.pat, &temp_var, state)?;
-        let body_expr = rust_expr_to_js(&arm.body, state)?;
+        let body_expr = rust_expr_to_js_with_state(&arm.body, state)?;
         let body_stmt = state.mk_return_stmt(Some(body_expr));
 
         let current_if = js::Stmt::If(js::IfStmt {
@@ -1845,7 +1845,7 @@ fn handle_loop_expr(
     loop_expr: &syn::ExprLoop,
     state: &mut TranspilerState,
 ) -> Result<js::Expr, String> {
-    let body_stmts = rust_block_to_js(&loop_expr.body, state)?;
+    let body_stmts = rust_block_to_js_with_state(&loop_expr.body, state)?;
 
     let while_stmt = js::Stmt::While(js::WhileStmt {
         span: DUMMY_SP,
@@ -1884,7 +1884,7 @@ fn handle_closure_expr(
     // Handle closure body
     let body = match &*closure.body {
         Expr::Block(block_expr) => {
-            let stmts = rust_block_to_js(&block_expr.block, state)?;
+            let stmts = rust_block_to_js_with_state(&block_expr.block, state)?;
             js::BlockStmtOrExpr::BlockStmt(js::BlockStmt {
                 span: DUMMY_SP,
                 stmts,
@@ -1892,7 +1892,7 @@ fn handle_closure_expr(
             })
         }
         _ => {
-            let expr = rust_expr_to_js(&closure.body, state)?;
+            let expr = rust_expr_to_js_with_state(&closure.body, state)?;
             js::BlockStmtOrExpr::Expr(Box::new(expr))
         }
     };
@@ -1924,7 +1924,7 @@ fn handle_struct_expr(
     let args: Result<Vec<_>, _> = struct_expr
         .fields
         .iter()
-        .map(|field| rust_expr_to_js(&field.expr, state))
+        .map(|field| rust_expr_to_js_with_state(&field.expr, state))
         .collect();
 
     let js_args = args?;
@@ -1956,8 +1956,8 @@ fn handle_range_expr(
 ) -> Result<js::Expr, String> {
     match (&range_expr.start, &range_expr.end) {
         (Some(start), Some(end)) => {
-            let start_js = rust_expr_to_js(start, state)?;
-            let end_js = rust_expr_to_js(end, state)?;
+            let start_js = rust_expr_to_js_with_state(start, state)?;
+            let end_js = rust_expr_to_js_with_state(end, state)?;
 
             // Create Array.from({length: end - start}, (_, i) => i + start)
             let array_from = state.mk_member_expr(js::Expr::Ident(state.mk_ident("Array")), "from");
@@ -2008,7 +2008,7 @@ fn handle_range_expr(
         }
         (None, Some(end)) => {
             // Range to end (..end) -> Array.from({length: end}, (_, i) => i)
-            let end_js = rust_expr_to_js(end, state)?;
+            let end_js = rust_expr_to_js_with_state(end, state)?;
             let array_from = state.mk_member_expr(js::Expr::Ident(state.mk_ident("Array")), "from");
 
             let length_obj = js::Expr::Object(js::ObjectLit {
@@ -2056,8 +2056,8 @@ fn handle_range_expr(
     }
 }
 
-/// Complete the rust_expr_to_js function with remaining expression types
-pub fn rust_expr_to_js_complete(
+/// Complete the rust_expr_to_js_with_state function with remaining expression types
+pub fn rust_expr_to_js_with_state_complete(
     expr: &Expr,
     state: &mut TranspilerState,
 ) -> Result<js::Expr, String> {
@@ -2076,7 +2076,7 @@ pub fn rust_expr_to_js_complete(
         | Expr::Index(_)
         | Expr::Assign(_)
         | Expr::Return(_)
-        | Expr::Macro(_) => rust_expr_to_js(expr, state),
+        | Expr::Macro(_) => rust_expr_to_js_with_state(expr, state),
 
         // Handle additional expression types
         Expr::While(while_expr) => handle_while_expr(while_expr, state),
@@ -2089,7 +2089,7 @@ pub fn rust_expr_to_js_complete(
 
         Expr::Paren(paren) => {
             // Parenthesized expressions
-            let inner = rust_expr_to_js(&paren.expr, state)?;
+            let inner = rust_expr_to_js_with_state(&paren.expr, state)?;
             Ok(js::Expr::Paren(js::ParenExpr {
                 span: DUMMY_SP,
                 expr: Box::new(inner),
@@ -2098,7 +2098,7 @@ pub fn rust_expr_to_js_complete(
 
         Expr::Break(break_expr) => {
             if let Some(value) = &break_expr.expr {
-                let value_js = rust_expr_to_js(value, state)?;
+                let value_js = rust_expr_to_js_with_state(value, state)?;
                 state.add_warning("Break with value requires special handling".to_string());
                 Ok(value_js)
             } else {
@@ -2117,7 +2117,7 @@ pub fn rust_expr_to_js_complete(
             let elements: Result<Vec<_>, _> = tuple
                 .elems
                 .iter()
-                .map(|elem| rust_expr_to_js(elem, state))
+                .map(|elem| rust_expr_to_js_with_state(elem, state))
                 .collect();
 
             let js_elements: Vec<Option<js::ExprOrSpread>> = elements?
