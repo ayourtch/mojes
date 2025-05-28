@@ -283,7 +283,9 @@ impl TranspilerState {
 }
 
 /// Generate JavaScript methods for a Rust impl block
-pub fn generate_js_methods_for_impl_with_state(input_impl: &ItemImpl) -> Result<Vec<js::ModuleItem>, String> {
+pub fn generate_js_methods_for_impl_with_state(
+    input_impl: &ItemImpl,
+) -> Result<Vec<js::ModuleItem>, String> {
     let mut state = TranspilerState::new();
 
     let struct_name = if let syn::Type::Path(type_path) = &*input_impl.self_ty {
@@ -438,7 +440,10 @@ pub fn rust_block_to_js_with_state(
 }
 
 /// Convert Rust expression to JavaScript expression
-pub fn rust_expr_to_js_with_state(expr: &Expr, state: &mut TranspilerState) -> Result<js::Expr, String> {
+pub fn rust_expr_to_js_with_state(
+    expr: &Expr,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
     match expr {
         // Handle literals
         Expr::Lit(lit) => match &lit.lit {
@@ -1046,7 +1051,10 @@ fn handle_format_macro_with_state(
     }
 
     // Fallback: concatenate arguments
-    let js_args: Result<Vec<_>, _> = args.iter().map(|arg| rust_expr_to_js_with_state(arg, state)).collect();
+    let js_args: Result<Vec<_>, _> = args
+        .iter()
+        .map(|arg| rust_expr_to_js_with_state(arg, state))
+        .collect();
 
     let args_vec = js_args?;
     if args_vec.len() == 1 {
@@ -1307,7 +1315,9 @@ pub fn escape_js_identifier(rust_ident: &str) -> String {
 }
 
 /// Generate JavaScript class for a Rust struct
-pub fn generate_js_class_for_struct_with_state(input_struct: &ItemStruct) -> Result<js::ModuleItem, String> {
+pub fn generate_js_class_for_struct_with_state(
+    input_struct: &ItemStruct,
+) -> Result<js::ModuleItem, String> {
     let mut state = TranspilerState::new();
     let struct_name = input_struct.ident.to_string();
 
@@ -2202,4 +2212,85 @@ mod tests {
         assert!(js_code.contains("Active"));
         assert!(js_code.contains("Pending"));
     }
+}
+
+/// Generate JavaScript methods for a Rust impl block (old API)
+pub fn generate_js_methods_for_impl(input_impl: &ItemImpl) -> String {
+    let mut state = TranspilerState::new();
+
+    let module_items = generate_js_methods_for_impl_with_state(input_impl)
+        .expect("Failed to generate JavaScript methods for impl block");
+
+    ast_to_code(&module_items).expect("Failed to convert AST to JavaScript code")
+}
+
+/// Handle format macro (old API)
+pub fn handle_format_macro(args: &Punctuated<Expr, Comma>) -> String {
+    let mut state = TranspilerState::new();
+
+    let expr =
+        handle_format_macro_with_state(args, &mut state).expect("Failed to handle format macro");
+
+    // Convert single expression to code
+    let module_items = vec![js::ModuleItem::Stmt(js::Stmt::Expr(js::ExprStmt {
+        span: DUMMY_SP,
+        expr: Box::new(expr),
+    }))];
+
+    let code =
+        ast_to_code(&module_items).expect("Failed to convert format macro to JavaScript code");
+
+    // Extract just the expression part, removing the trailing semicolon
+    code.trim_end_matches(';').to_string()
+}
+
+/// Convert Rust block to JavaScript (old API)
+pub fn rust_block_to_js(block: &Block) -> String {
+    let mut state = TranspilerState::new();
+
+    let stmts = rust_block_to_js_with_state(block, &mut state)
+        .expect("Failed to convert Rust block to JavaScript");
+
+    let module_items: Vec<js::ModuleItem> = stmts
+        .into_iter()
+        .map(|stmt| js::ModuleItem::Stmt(stmt))
+        .collect();
+
+    ast_to_code(&module_items).expect("Failed to convert block AST to JavaScript code")
+}
+
+/// Convert Rust expression to JavaScript (old API)
+pub fn rust_expr_to_js(expr: &Expr) -> String {
+    let mut state = TranspilerState::new();
+
+    let js_expr = rust_expr_to_js_with_state(expr, &mut state)
+        .expect("Failed to convert Rust expression to JavaScript");
+
+    // Convert single expression to code
+    let module_items = vec![js::ModuleItem::Stmt(js::Stmt::Expr(js::ExprStmt {
+        span: DUMMY_SP,
+        expr: Box::new(js_expr),
+    }))];
+
+    let code =
+        ast_to_code(&module_items).expect("Failed to convert expression AST to JavaScript code");
+
+    // Extract just the expression part, removing the trailing semicolon
+    code.trim_end_matches(';').to_string()
+}
+
+/// Generate JavaScript class for struct (old API)
+pub fn generate_js_class_for_struct(input_struct: &ItemStruct) -> String {
+    let module_item = generate_js_class_for_struct_with_state(input_struct)
+        .expect("Failed to generate JavaScript class for struct");
+
+    ast_to_code(&[module_item]).expect("Failed to convert struct AST to JavaScript code")
+}
+
+/// Generate JavaScript enum (old API)
+pub fn generate_js_enum(input_enum: &ItemEnum) -> String {
+    let module_item =
+        generate_js_enum_with_state(input_enum).expect("Failed to generate JavaScript enum");
+
+    ast_to_code(&[module_item]).expect("Failed to convert enum AST to JavaScript code")
 }
