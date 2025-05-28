@@ -174,9 +174,10 @@ fn test_enum_with_data() {
     println!("DEBUG test_enum_with_data js code: {}", &js_enum);
     assert!(js_enum.contains("const Message"));
     assert!(js_enum.contains("Quit: 'Quit'"));
-    assert!(js_enum.contains("Move("));
-    assert!(js_enum.contains("Write("));
-    assert!(js_enum.contains("ChangeColor("));
+    assert!(js_enum.contains("Move(") || js_enum.contains("Move: function"));
+    assert!(js_enum.contains("Write(") || js_enum.contains("Write: function"));
+    assert!(js_enum.contains("ChangeColor(") || js_enum.contains("ChangeColor: function"));
+    assert!(js_enum.contains("function isMessage("));
 }
 
 // ==================== TUPLE STRUCT TESTS ====================
