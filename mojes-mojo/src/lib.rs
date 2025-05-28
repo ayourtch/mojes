@@ -2217,12 +2217,16 @@ pub fn generate_js_class_for_struct_with_state(
     };
 
     // Create constructor parameters
-    let constructor_params: Vec<js::Pat> = fields
+    let constructor_params: Vec<js::ParamOrTsParamProp> = fields
         .iter()
         .map(|(name, _)| {
-            js::Pat::Ident(js::BindingIdent {
-                id: state.mk_ident(name),
-                type_ann: None,
+            js::ParamOrTsParamProp::Param(js::Param {
+                span: DUMMY_SP,
+                decorators: vec![],
+                pat: js::Pat::Ident(js::BindingIdent {
+                    id: state.mk_ident(name),
+                    type_ann: None,
+                }),
             })
         })
         .collect();
@@ -2239,30 +2243,10 @@ pub fn generate_js_class_for_struct_with_state(
         constructor_body.push(state.mk_expr_stmt(assignment));
     }
 
-    let constructor_params_converted: Vec<js::ParamOrTsParamProp> = constructor_params
-        .into_iter()
-        .map(|pat| {
-            js::ParamOrTsParamProp::TsParamProp(js::TsParamProp {
-                span: DUMMY_SP,
-                decorators: vec![],
-                accessibility: None,
-                readonly: false,
-                is_override: false,
-                param: js::TsParamPropParam::Ident(match pat {
-                    js::Pat::Ident(binding_ident) => binding_ident,
-                    _ => js::BindingIdent {
-                        id: state.mk_ident("param"),
-                        type_ann: None,
-                    },
-                }),
-            })
-        })
-        .collect();
-
     let constructor = js::Constructor {
         span: DUMMY_SP,
         key: js::PropName::Ident(state.mk_ident_name("constructor")),
-        params: constructor_params_converted,
+        params: constructor_params,
         body: Some(js::BlockStmt {
             span: DUMMY_SP,
             stmts: constructor_body,
@@ -2273,11 +2257,21 @@ pub fn generate_js_class_for_struct_with_state(
         ctxt: SyntaxContext::empty(),
     };
 
-    // Create class
+    // Create toJSON method
+    let to_json_method = create_to_json_method(&fields, &mut state)?;
+
+    // Create fromJSON static method
+    let from_json_method = create_from_json_static_method(&struct_name, &fields, &mut state)?;
+
+    // Create class with all methods
     let class = js::Class {
         span: DUMMY_SP,
         decorators: vec![],
-        body: vec![js::ClassMember::Constructor(constructor)],
+        body: vec![
+            js::ClassMember::Constructor(constructor),
+            js::ClassMember::Method(to_json_method),
+            js::ClassMember::Method(from_json_method),
+        ],
         super_class: None,
         is_abstract: false,
         type_params: None,
@@ -2293,6 +2287,118 @@ pub fn generate_js_class_for_struct_with_state(
             class: Box::new(class),
         },
     ))))
+}
+
+// Helper function to create toJSON method
+fn create_to_json_method(
+    fields: &[(String, String)],
+    state: &mut TranspilerState,
+) -> Result<js::ClassMethod, String> {
+    // Create object properties for each field
+    let mut props = Vec::new();
+
+    for (name, _) in fields {
+        props.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+            js::KeyValueProp {
+                key: js::PropName::Ident(state.mk_ident_name(name)),
+                value: Box::new(state.mk_member_expr(state.mk_this_expr(), name)),
+            },
+        ))));
+    }
+
+    let return_obj = js::Expr::Object(js::ObjectLit {
+        span: DUMMY_SP,
+        props,
+    });
+
+    let method_body = js::BlockStmt {
+        span: DUMMY_SP,
+        stmts: vec![state.mk_return_stmt(Some(return_obj))],
+        ctxt: SyntaxContext::empty(),
+    };
+
+    Ok(js::ClassMethod {
+        span: DUMMY_SP,
+        key: js::PropName::Ident(state.mk_ident_name("toJSON")),
+        function: Box::new(js::Function {
+            params: vec![],
+            decorators: vec![],
+            span: DUMMY_SP,
+            body: Some(method_body),
+            is_generator: false,
+            is_async: false,
+            type_params: None,
+            return_type: None,
+            ctxt: SyntaxContext::empty(),
+        }),
+        kind: js::MethodKind::Method,
+        is_static: false,
+        accessibility: None,
+        is_abstract: false,
+        is_optional: false,
+        is_override: false,
+    })
+}
+
+// Helper function to create fromJSON static method
+fn create_from_json_static_method(
+    struct_name: &str,
+    fields: &[(String, String)],
+    state: &mut TranspilerState,
+) -> Result<js::ClassMethod, String> {
+    // Create constructor arguments from json properties
+    let constructor_args: Vec<js::Expr> = fields
+        .iter()
+        .map(|(name, _)| state.mk_member_expr(js::Expr::Ident(state.mk_ident("json")), name))
+        .collect();
+
+    // Create new StructName(json.field1, json.field2, ...)
+    let new_instance = js::Expr::New(js::NewExpr {
+        span: DUMMY_SP,
+        callee: Box::new(js::Expr::Ident(state.mk_ident(struct_name))),
+        args: Some(
+            constructor_args
+                .into_iter()
+                .map(|expr| js::ExprOrSpread {
+                    spread: None,
+                    expr: Box::new(expr),
+                })
+                .collect(),
+        ),
+        type_args: None,
+        ctxt: SyntaxContext::empty(),
+    });
+
+    let method_body = js::BlockStmt {
+        span: DUMMY_SP,
+        stmts: vec![state.mk_return_stmt(Some(new_instance))],
+        ctxt: SyntaxContext::empty(),
+    };
+
+    Ok(js::ClassMethod {
+        span: DUMMY_SP,
+        key: js::PropName::Ident(state.mk_ident_name("fromJSON")),
+        function: Box::new(js::Function {
+            params: vec![state.pat_to_param(js::Pat::Ident(js::BindingIdent {
+                id: state.mk_ident("json"),
+                type_ann: None,
+            }))],
+            decorators: vec![],
+            span: DUMMY_SP,
+            body: Some(method_body),
+            is_generator: false,
+            is_async: false,
+            type_params: None,
+            return_type: None,
+            ctxt: SyntaxContext::empty(),
+        }),
+        kind: js::MethodKind::Method,
+        is_static: true, // This is the key difference - static method
+        accessibility: None,
+        is_abstract: false,
+        is_optional: false,
+        is_override: false,
+    })
 }
 
 /// Generate JavaScript enum

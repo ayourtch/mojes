@@ -137,6 +137,10 @@ mod tests {
             js_class
         );
 
+        println!(
+            "DEBUG test_js_class_functionality_with_boa js code: {}",
+            &test_code
+        );
         let result = eval_js(&test_code).unwrap();
         // Should return [10, 20, 10, 20]
         assert!(is_js_array(&result));
