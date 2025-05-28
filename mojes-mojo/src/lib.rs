@@ -493,39 +493,61 @@ pub fn rust_expr_to_js_with_state(
             let right = rust_expr_to_js_with_state(&bin.right, state)?;
 
             let js_op = match &bin.op {
-                syn::BinOp::Add(_) => {
-                    // Check for string concatenation
-                    if is_string_expr(&bin.left) || is_string_expr(&bin.right) {
-                        // Use template literal for string concatenation
-                        return Ok(state.mk_template_literal(
-                            vec!["".to_string(), "".to_string()],
-                            vec![left, right],
-                        ));
-                    } else {
-                        js::BinaryOp::Add
-                    }
-                }
-                syn::BinOp::Sub(_) => js::BinaryOp::Sub,
-                syn::BinOp::Mul(_) => js::BinaryOp::Mul,
-                syn::BinOp::Div(_) => js::BinaryOp::Div,
-                syn::BinOp::Rem(_) => js::BinaryOp::Mod,
-                syn::BinOp::And(_) => js::BinaryOp::LogicalAnd,
-                syn::BinOp::Or(_) => js::BinaryOp::LogicalOr,
-                syn::BinOp::BitXor(_) => js::BinaryOp::BitXor,
-                syn::BinOp::BitAnd(_) => js::BinaryOp::BitAnd,
-                syn::BinOp::BitOr(_) => js::BinaryOp::BitOr,
-                syn::BinOp::Shl(_) => js::BinaryOp::LShift,
-                syn::BinOp::Shr(_) => js::BinaryOp::RShift,
-                syn::BinOp::Eq(_) => js::BinaryOp::EqEqEq,
-                syn::BinOp::Lt(_) => js::BinaryOp::Lt,
-                syn::BinOp::Le(_) => js::BinaryOp::LtEq,
-                syn::BinOp::Ne(_) => js::BinaryOp::NotEqEq,
-                syn::BinOp::Ge(_) => js::BinaryOp::GtEq,
-                syn::BinOp::Gt(_) => js::BinaryOp::Gt,
-                _ => return Err("Unsupported binary operator".to_string()),
+                syn::BinOp::AddAssign(_) => Some(js::AssignOp::AddAssign),
+                syn::BinOp::SubAssign(_) => Some(js::AssignOp::SubAssign),
+                syn::BinOp::MulAssign(_) => Some(js::AssignOp::MulAssign),
+                syn::BinOp::DivAssign(_) => Some(js::AssignOp::DivAssign),
+                syn::BinOp::RemAssign(_) => Some(js::AssignOp::ModAssign),
+                syn::BinOp::BitXorAssign(_) => Some(js::AssignOp::BitXorAssign),
+                syn::BinOp::BitAndAssign(_) => Some(js::AssignOp::BitAndAssign),
+                syn::BinOp::BitOrAssign(_) => Some(js::AssignOp::BitOrAssign),
+                syn::BinOp::ShlAssign(_) => Some(js::AssignOp::LShiftAssign),
+                syn::BinOp::ShrAssign(_) => Some(js::AssignOp::RShiftAssign),
+                _ => None,
             };
+            if let Some(js_op) = js_op {
+                Ok(js::Expr::Assign(js::AssignExpr {
+                    span: DUMMY_SP,
+                    op: js_op,
+                    left: state.expr_to_assign_target(left)?,
+                    right: Box::new(right),
+                }))
+            } else {
+                let js_op = match &bin.op {
+                    syn::BinOp::Add(_) => {
+                        // Check for string concatenation
+                        if is_string_expr(&bin.left) || is_string_expr(&bin.right) {
+                            // Use template literal for string concatenation
+                            return Ok(state.mk_template_literal(
+                                vec!["".to_string(), "".to_string()],
+                                vec![left, right],
+                            ));
+                        } else {
+                            js::BinaryOp::Add
+                        }
+                    }
+                    syn::BinOp::Sub(_) => js::BinaryOp::Sub,
+                    syn::BinOp::Mul(_) => js::BinaryOp::Mul,
+                    syn::BinOp::Div(_) => js::BinaryOp::Div,
+                    syn::BinOp::Rem(_) => js::BinaryOp::Mod,
+                    syn::BinOp::And(_) => js::BinaryOp::LogicalAnd,
+                    syn::BinOp::Or(_) => js::BinaryOp::LogicalOr,
+                    syn::BinOp::BitXor(_) => js::BinaryOp::BitXor,
+                    syn::BinOp::BitAnd(_) => js::BinaryOp::BitAnd,
+                    syn::BinOp::BitOr(_) => js::BinaryOp::BitOr,
+                    syn::BinOp::Shl(_) => js::BinaryOp::LShift,
+                    syn::BinOp::Shr(_) => js::BinaryOp::RShift,
+                    syn::BinOp::Eq(_) => js::BinaryOp::EqEqEq,
+                    syn::BinOp::Lt(_) => js::BinaryOp::Lt,
+                    syn::BinOp::Le(_) => js::BinaryOp::LtEq,
+                    syn::BinOp::Ne(_) => js::BinaryOp::NotEqEq,
+                    syn::BinOp::Ge(_) => js::BinaryOp::GtEq,
+                    syn::BinOp::Gt(_) => js::BinaryOp::Gt,
+                    _ => return Err("Unsupported binary operator".to_string()),
+                };
 
-            Ok(state.mk_binary_expr(left, js_op, right))
+                Ok(state.mk_binary_expr(left, js_op, right))
+            }
         }
 
         // Handle unary operations

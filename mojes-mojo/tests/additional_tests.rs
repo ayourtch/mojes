@@ -16,6 +16,13 @@ fn eval_block_as_function(block_js: &str) -> JsResult<JsValue> {
 }
 
 #[test]
+fn test_assign_op() {
+    let expr: Expr = parse_quote!(x += 42);
+    let js_code = rust_expr_to_js(&expr);
+    assert_eq!(js_code, "x += 42");
+}
+
+#[test]
 fn test_current_string_escaping_behavior() {
     let expr: Expr = parse_quote!("Line 1\nLine 2\tTabbed\rCarriage\"Quote");
     let js_code = rust_expr_to_js(&expr);
