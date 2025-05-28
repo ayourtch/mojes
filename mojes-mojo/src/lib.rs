@@ -223,9 +223,14 @@ impl TranspilerState {
             ctxt: SyntaxContext::empty(),
         };
 
-        self.mk_call_expr(js::Expr::Arrow(arrow_fn), vec![])
-    }
+        // Wrap just the arrow function in parentheses for proper JavaScript syntax
+        let wrapped_arrow = js::Expr::Paren(js::ParenExpr {
+            span: DUMMY_SP,
+            expr: Box::new(js::Expr::Arrow(arrow_fn)),
+        });
 
+        self.mk_call_expr(wrapped_arrow, vec![])
+    }
     pub fn mk_var_decl(&self, name: &str, init: Option<js::Expr>, is_const: bool) -> js::Stmt {
         let kind = if is_const {
             js::VarDeclKind::Const

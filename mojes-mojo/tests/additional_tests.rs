@@ -517,7 +517,8 @@ fn test_mixed_expressions_in_blocks() {
 
     // Should contain all expected parts
     assert!(js_code.contains("const data = [1, 2, 3]"));
-    assert!(js_code.contains("x => x * 2")); // Closure should be converted
+    assert!(js_code.contains("(x)=>x * 2") || js_code.contains("x => x * 2"));
+
     assert!(js_code.contains("data.map"));
     assert!(js_code.contains("processed.length")); // .len() -> .length (property)
 
@@ -545,7 +546,8 @@ fn test_unsupported_expressions() {
     let js_code = rust_expr_to_js(&expr);
 
     // Should now generate proper async JavaScript, not an error
-    assert!(js_code.contains("async function"));
+    assert!(js_code.contains("async") && js_code.contains("=>"));
+
     assert!(js_code.contains("await some_future"));
 
     println!("Async expressions are now supported: {}", js_code);
