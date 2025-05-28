@@ -457,15 +457,21 @@ pub fn rust_block_to_js_with_state(
                             js_stmts.push(state.mk_return_stmt(None));
                         }
                     }
-                    _ => {
+                    x => {
+                        println!("DEBUG EXPR IN BLOCK: {:?}, semi: {:?}", &x, &semi);
                         let js_expr = rust_expr_to_js_with_state(expr, state)?;
 
                         if semi.is_some() {
                             // Expression with semicolon - treat as statement
                             js_stmts.push(state.mk_expr_stmt(js_expr));
                         } else {
-                            // Expression without semicolon - likely a return expression
-                            js_stmts.push(state.mk_return_stmt(Some(js_expr)));
+                            // Expression without semicolon - only return if it's the last statement
+                            let is_last_stmt = stmt == block.stmts.last().unwrap();
+                            if is_last_stmt {
+                                js_stmts.push(state.mk_return_stmt(Some(js_expr)));
+                            } else {
+                                js_stmts.push(state.mk_expr_stmt(js_expr));
+                            }
                         }
                     }
                 }
