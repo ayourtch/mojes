@@ -18,6 +18,7 @@ fn eval_expr_with_vars(expr_js: &str, vars: &[(&str, &str)]) -> JsResult<JsValue
         .join("\n");
 
     let code = format!("{}\n{}", var_declarations, expr_js);
+    println!("DEBUG EVAL js: {}", &code);
     eval_js(&code)
 }
 

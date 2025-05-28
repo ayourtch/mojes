@@ -3892,7 +3892,7 @@ pub fn rust_block_to_js(block: &Block) -> String {
 pub fn rust_expr_to_js(expr: &Expr) -> String {
     let mut state = TranspilerState::new();
 
-    let js_expr = rust_expr_to_js_with_state(expr, &mut state)
+    let js_expr = rust_expr_to_js_with_action_and_state(BlockAction::Return, expr, &mut state)
         .expect("Failed to convert Rust expression to JavaScript");
 
     // Convert single expression to code
