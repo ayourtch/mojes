@@ -277,7 +277,6 @@ fn test_if_in_loops() {
     let block: Block = parse_quote! {
         {
             let mut found = false;
-            println!("hello there!");
             for i in [1, 2, 3, 4, 5] {
                 if i == 3 {
                     found = true;

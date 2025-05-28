@@ -487,6 +487,409 @@ fn convert_loop_to_stmt(loop_expr: &syn::ExprLoop, state: &mut TranspilerState) 
 }
 */
 
+/// Core function that converts Rust if expression to JavaScript if statement
+fn convert_if_to_stmt(
+    block_action: BlockAction,
+    if_expr: &syn::ExprIf,
+    state: &mut TranspilerState,
+) -> Result<js::Stmt, String> {
+    // Check if this is an if-let expression
+    if let Some(if_let_stmt) = handle_if_let_as_stmt(block_action, if_expr, state)? {
+        return Ok(if_let_stmt);
+    }
+
+    // Regular if expression
+    let test = rust_expr_to_js_with_state(&if_expr.cond, state)?;
+    let consequent_stmts = rust_block_to_js_with_state(block_action, &if_expr.then_branch, state)?;
+
+    let consequent = js::Stmt::Block(js::BlockStmt {
+        span: DUMMY_SP,
+        stmts: consequent_stmts,
+        ctxt: SyntaxContext::empty(),
+    });
+
+    // Handle else branch
+    let alternate = if let Some((_, else_branch)) = &if_expr.else_branch {
+        match &**else_branch {
+            Expr::Block(else_block) => {
+                let else_stmts =
+                    rust_block_to_js_with_state(block_action, &else_block.block, state)?;
+                Some(Box::new(js::Stmt::Block(js::BlockStmt {
+                    span: DUMMY_SP,
+                    stmts: else_stmts,
+                    ctxt: SyntaxContext::empty(),
+                })))
+            }
+            Expr::If(nested_if) => {
+                // Handle else if - recursively convert
+                Some(Box::new(convert_if_to_stmt(
+                    block_action,
+                    nested_if,
+                    state,
+                )?))
+            }
+            _ => {
+                // Single expression else
+                let else_expr = rust_expr_to_js_with_state(else_branch, state)?;
+                Some(Box::new(js::Stmt::Block(js::BlockStmt {
+                    span: DUMMY_SP,
+                    stmts: vec![state.mk_expr_stmt(else_expr)],
+                    ctxt: SyntaxContext::empty(),
+                })))
+            }
+        }
+    } else {
+        None
+    };
+
+    Ok(js::Stmt::If(js::IfStmt {
+        span: DUMMY_SP,
+        test: Box::new(test),
+        cons: Box::new(consequent),
+        alt: alternate,
+    }))
+}
+
+/// Enhanced if-let handling that returns a statement
+fn handle_if_let_as_stmt(
+    block_action: BlockAction,
+    if_expr: &syn::ExprIf,
+    state: &mut TranspilerState,
+) -> Result<Option<js::Stmt>, String> {
+    // Check if this is an "if let" expression by examining the condition
+    if let Expr::Let(expr_let) = &*if_expr.cond {
+        let pat = &expr_let.pat;
+        let init_expr = &expr_let.expr;
+
+        // Handle "if let Some(x) = ..." pattern
+        if let Pat::TupleStruct(tuple_struct) = &**pat {
+            if let Some(last_segment) = tuple_struct.path.segments.last() {
+                if last_segment.ident == "Some" && !tuple_struct.elems.is_empty() {
+                    return Ok(Some(convert_if_let_some_to_stmt(
+                        block_action,
+                        tuple_struct,
+                        init_expr,
+                        if_expr,
+                        state,
+                    )?));
+                }
+            }
+        }
+
+        // Handle other if-let patterns (None, custom enums, etc.)
+        return Ok(Some(convert_generic_if_let_to_stmt(
+            block_action,
+            pat,
+            init_expr,
+            if_expr,
+            state,
+        )?));
+    }
+
+    Ok(None)
+}
+
+/// Convert "if let Some(x) = expr" to optimized JavaScript statement
+fn convert_if_let_some_to_stmt(
+    block_action: BlockAction,
+    tuple_struct: &syn::PatTupleStruct,
+    init_expr: &Expr,
+    if_expr: &syn::ExprIf,
+    state: &mut TranspilerState,
+) -> Result<js::Stmt, String> {
+    let matched_expr = rust_expr_to_js_with_state(init_expr, state)?;
+    let then_stmts = rust_block_to_js_with_state(block_action, &if_expr.then_branch, state)?;
+
+    // Create null/undefined check condition
+    let not_null = state.mk_binary_expr(
+        matched_expr.clone(),
+        js::BinaryOp::NotEqEq,
+        state.mk_null_lit(),
+    );
+    let not_undefined = state.mk_binary_expr(
+        matched_expr.clone(),
+        js::BinaryOp::NotEqEq,
+        state.mk_undefined(),
+    );
+    let condition = state.mk_binary_expr(not_null, js::BinaryOp::LogicalAnd, not_undefined);
+
+    // Handle variable binding if present
+    let mut consequent_stmts = Vec::new();
+    if let Some(inner_pat) = tuple_struct.elems.first() {
+        if let Pat::Ident(pat_ident) = inner_pat {
+            let var_name = pat_ident.ident.to_string();
+            let js_var_name = escape_js_identifier(&var_name);
+            state.declare_variable(var_name, js_var_name.clone(), false);
+
+            // Add: const x = matched_expr;
+            consequent_stmts.push(state.mk_var_decl(&js_var_name, Some(matched_expr), true));
+        }
+    }
+
+    // Add the then branch statements
+    consequent_stmts.extend(then_stmts);
+
+    // Handle else branch
+    let alternate = if let Some((_, else_branch)) = &if_expr.else_branch {
+        match &**else_branch {
+            Expr::Block(else_block) => {
+                let else_stmts =
+                    rust_block_to_js_with_state(block_action, &else_block.block, state)?;
+                Some(Box::new(js::Stmt::Block(js::BlockStmt {
+                    span: DUMMY_SP,
+                    stmts: else_stmts,
+                    ctxt: SyntaxContext::empty(),
+                })))
+            }
+            Expr::If(nested_if) => Some(Box::new(convert_if_to_stmt(
+                block_action,
+                nested_if,
+                state,
+            )?)),
+            _ => {
+                let else_expr = rust_expr_to_js_with_state(else_branch, state)?;
+                Some(Box::new(js::Stmt::Block(js::BlockStmt {
+                    span: DUMMY_SP,
+                    stmts: vec![state.mk_expr_stmt(else_expr)],
+                    ctxt: SyntaxContext::empty(),
+                })))
+            }
+        }
+    } else {
+        None
+    };
+
+    Ok(js::Stmt::If(js::IfStmt {
+        span: DUMMY_SP,
+        test: Box::new(condition),
+        cons: Box::new(js::Stmt::Block(js::BlockStmt {
+            span: DUMMY_SP,
+            stmts: consequent_stmts,
+            ctxt: SyntaxContext::empty(),
+        })),
+        alt: alternate,
+    }))
+}
+
+/// Convert generic if-let patterns to JavaScript statements
+fn convert_generic_if_let_to_stmt(
+    block_action: BlockAction,
+    pat: &Pat,
+    init_expr: &Expr,
+    if_expr: &syn::ExprIf,
+    state: &mut TranspilerState,
+) -> Result<js::Stmt, String> {
+    let matched_expr = rust_expr_to_js_with_state(init_expr, state)?;
+    let temp_var = state.generate_temp_var();
+
+    let mut stmts = vec![state.mk_var_decl(&temp_var, Some(matched_expr), true)];
+
+    let (condition, mut binding_stmts) = handle_pattern_binding(pat, &temp_var, state)?;
+    let then_stmts = rust_block_to_js_with_state(block_action, &if_expr.then_branch, state)?;
+
+    // Combine binding statements with then branch
+    binding_stmts.extend(then_stmts);
+
+    // Handle else branch
+    let alternate = if let Some((_, else_branch)) = &if_expr.else_branch {
+        match &**else_branch {
+            Expr::Block(else_block) => {
+                let else_stmts =
+                    rust_block_to_js_with_state(block_action, &else_block.block, state)?;
+                Some(Box::new(js::Stmt::Block(js::BlockStmt {
+                    span: DUMMY_SP,
+                    stmts: else_stmts,
+                    ctxt: SyntaxContext::empty(),
+                })))
+            }
+            Expr::If(nested_if) => Some(Box::new(convert_if_to_stmt(
+                block_action,
+                nested_if,
+                state,
+            )?)),
+            _ => {
+                let else_expr = rust_expr_to_js_with_state(else_branch, state)?;
+                Some(Box::new(js::Stmt::Block(js::BlockStmt {
+                    span: DUMMY_SP,
+                    stmts: vec![state.mk_expr_stmt(else_expr)],
+                    ctxt: SyntaxContext::empty(),
+                })))
+            }
+        }
+    } else {
+        None
+    };
+
+    let if_stmt = js::Stmt::If(js::IfStmt {
+        span: DUMMY_SP,
+        test: Box::new(condition),
+        cons: Box::new(js::Stmt::Block(js::BlockStmt {
+            span: DUMMY_SP,
+            stmts: binding_stmts,
+            ctxt: SyntaxContext::empty(),
+        })),
+        alt: alternate,
+    });
+
+    stmts.push(if_stmt);
+
+    // Return a block containing the temp variable and the if statement
+    Ok(js::Stmt::Block(js::BlockStmt {
+        span: DUMMY_SP,
+        stmts,
+        ctxt: SyntaxContext::empty(),
+    }))
+}
+
+/// Modified handle_if_expr that reuses the core logic
+fn handle_if_expr(
+    block_action: BlockAction,
+    if_expr: &syn::ExprIf,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    // Check if this is an if-let expression that should be handled specially
+    if let Some(if_let_expr) = handle_if_let_as_expr(block_action, if_expr, state)? {
+        return Ok(if_let_expr);
+    }
+
+    // For regular if expressions, convert to statement and wrap in IIFE
+    let if_stmt = convert_if_to_stmt(block_action, if_expr, state)?;
+
+    // Wrap in IIFE and add a default return
+    let mut stmts = vec![if_stmt];
+    stmts.push(state.mk_return_stmt(Some(state.mk_undefined())));
+
+    Ok(state.mk_iife(stmts))
+}
+
+/// Handle if-let expressions that need to return values (expression context)
+fn handle_if_let_as_expr(
+    block_action: BlockAction,
+    if_expr: &syn::ExprIf,
+    state: &mut TranspilerState,
+) -> Result<Option<js::Expr>, String> {
+    if let Expr::Let(expr_let) = &*if_expr.cond {
+        let pat = &expr_let.pat;
+        let init_expr = &expr_let.expr;
+
+        // Handle "if let Some(x) = ..." pattern in expression context
+        if let Pat::TupleStruct(tuple_struct) = &**pat {
+            if let Some(last_segment) = tuple_struct.path.segments.last() {
+                if last_segment.ident == "Some" && !tuple_struct.elems.is_empty() {
+                    return Ok(Some(convert_if_let_some_to_expr(
+                        block_action,
+                        tuple_struct,
+                        init_expr,
+                        if_expr,
+                        state,
+                    )?));
+                }
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+/// Convert "if let Some(x) = expr" to IIFE expression (like legacy version)
+fn convert_if_let_some_to_expr(
+    block_action: BlockAction,
+    tuple_struct: &syn::PatTupleStruct,
+    init_expr: &Expr,
+    if_expr: &syn::ExprIf,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    let matched_expr = rust_expr_to_js_with_state(init_expr, state)?;
+    let temp_var = "_temp";
+
+    let mut stmts = vec![state.mk_var_decl(temp_var, Some(matched_expr), true)];
+
+    // Create condition
+    let not_null = state.mk_binary_expr(
+        js::Expr::Ident(state.mk_ident(temp_var)),
+        js::BinaryOp::NotEqEq,
+        state.mk_null_lit(),
+    );
+    let not_undefined = state.mk_binary_expr(
+        js::Expr::Ident(state.mk_ident(temp_var)),
+        js::BinaryOp::NotEqEq,
+        state.mk_undefined(),
+    );
+    let condition = state.mk_binary_expr(not_null, js::BinaryOp::LogicalAnd, not_undefined);
+
+    // Handle variable binding and then branch
+    let mut then_stmts = Vec::new();
+    if let Some(inner_pat) = tuple_struct.elems.first() {
+        if let Pat::Ident(pat_ident) = inner_pat {
+            let var_name = pat_ident.ident.to_string();
+            let js_var_name = escape_js_identifier(&var_name);
+            state.declare_variable(var_name, js_var_name.clone(), false);
+
+            then_stmts.push(state.mk_var_decl(
+                &js_var_name,
+                Some(js::Expr::Ident(state.mk_ident(temp_var))),
+                true,
+            ));
+        }
+    }
+
+    let then_body_stmts = rust_block_to_js_with_state(block_action, &if_expr.then_branch, state)?;
+    then_stmts.extend(then_body_stmts);
+
+    // Handle else branch
+    let else_stmts = if let Some((_, else_branch)) = &if_expr.else_branch {
+        match &**else_branch {
+            Expr::Block(else_block) => {
+                rust_block_to_js_with_state(block_action, &else_block.block, state)?
+            }
+            _ => {
+                let else_expr = rust_expr_to_js_with_state(else_branch, state)?;
+                vec![state.mk_return_stmt(Some(else_expr))]
+            }
+        }
+    } else {
+        vec![]
+    };
+
+    let if_stmt = js::Stmt::If(js::IfStmt {
+        span: DUMMY_SP,
+        test: Box::new(condition),
+        cons: Box::new(js::Stmt::Block(js::BlockStmt {
+            span: DUMMY_SP,
+            stmts: then_stmts,
+            ctxt: SyntaxContext::empty(),
+        })),
+        alt: if !else_stmts.is_empty() {
+            Some(Box::new(js::Stmt::Block(js::BlockStmt {
+                span: DUMMY_SP,
+                stmts: else_stmts,
+                ctxt: SyntaxContext::empty(),
+            })))
+        } else {
+            None
+        },
+    });
+
+    stmts.push(if_stmt);
+    stmts.push(state.mk_return_stmt(Some(state.mk_undefined())));
+
+    Ok(state.mk_iife(stmts))
+}
+
+/// Context-aware wrapper for if expressions
+pub fn handle_if_context_aware(
+    block_action: BlockAction,
+    if_expr: &syn::ExprIf,
+    state: &mut TranspilerState,
+    in_statement_context: bool,
+) -> Result<Either<js::Stmt, js::Expr>, String> {
+    if in_statement_context {
+        convert_if_to_stmt(block_action, if_expr, state).map(Either::Left)
+    } else {
+        handle_if_expr(block_action, if_expr, state).map(Either::Right)
+    }
+}
+
 /// Convert Rust block to JavaScript statements
 pub fn rust_block_to_js_with_state(
     block_action: BlockAction,
@@ -494,6 +897,7 @@ pub fn rust_block_to_js_with_state(
     state: &mut TranspilerState,
 ) -> Result<Vec<js::Stmt>, String> {
     let mut js_stmts = Vec::new();
+    println!("DEBUG BLK: {:?}", &block_action);
 
     state.enter_scope();
 
@@ -519,8 +923,17 @@ pub fn rust_block_to_js_with_state(
                         let for_stmt = convert_for_to_stmt_enhanced(for_expr, state)?;
                         js_stmts.push(for_stmt);
                     }
+                    Expr::If(if_expr) => {
+                        // Generate direct statement
+                        let if_stmt = convert_if_to_stmt(block_action, if_expr, state)?;
+                        println!("DEBUG IFIN BLOCK: {:?}", if_stmt);
+                        js_stmts.push(if_stmt);
+                    }
                     x => {
-                        println!("DEBUG EXPR IN BLOCK: {:?}, semi: {:?}", &x, &semi);
+                        println!(
+                            "DEBUG EXPR IN BLOCK (block action: {:?}) : {:?}, semi: {:?}",
+                            &block_action, &x, &semi
+                        );
                         let js_expr = rust_expr_to_js_with_state(expr, state)?;
 
                         if semi.is_some() {
@@ -1164,66 +1577,6 @@ fn handle_function_call(
             Ok(state.mk_call_expr(callee, js_args))
         }
     }
-}
-
-/// Handle if expressions
-fn handle_if_expr(
-    block_action: BlockAction,
-    if_expr: &syn::ExprIf,
-    state: &mut TranspilerState,
-) -> Result<js::Expr, String> {
-    let test = rust_expr_to_js_with_state(&if_expr.cond, state)?;
-    let consequent_stmts = rust_block_to_js_with_state(block_action, &if_expr.then_branch, state)?;
-    println!("DEBUG IF: {:?}", &block_action);
-
-    let mut if_stmts = vec![js::Stmt::If(js::IfStmt {
-        span: DUMMY_SP,
-        test: Box::new(test),
-        cons: Box::new(js::Stmt::Block(js::BlockStmt {
-            span: DUMMY_SP,
-            stmts: consequent_stmts,
-            ctxt: SyntaxContext::empty(),
-        })),
-        alt: None,
-    })];
-
-    // Handle else branch
-    if let Some((_, else_branch)) = &if_expr.else_branch {
-        let else_stmts = match &**else_branch {
-            Expr::Block(else_block) => {
-                rust_block_to_js_with_state(block_action, &else_block.block, state)?
-            }
-            Expr::If(_) => {
-                // Handle else if
-                let else_if_expr = rust_expr_to_js_with_state(else_branch, state)?;
-                vec![state.mk_expr_stmt(else_if_expr)]
-            }
-            _ => {
-                let else_expr = rust_expr_to_js_with_state(else_branch, state)?;
-                if block_action == BlockAction::Return {
-                    vec![state.mk_return_stmt(Some(else_expr))]
-                } else {
-                    vec![state.mk_expr_stmt(else_expr)]
-                }
-            }
-        };
-
-        // Update the if statement to include the else branch
-        if let js::Stmt::If(ref mut if_stmt) = if_stmts[0] {
-            if_stmt.alt = Some(Box::new(js::Stmt::Block(js::BlockStmt {
-                span: DUMMY_SP,
-                stmts: else_stmts,
-                ctxt: SyntaxContext::empty(),
-            })));
-        }
-    }
-
-    // Add a default return undefined if necessary
-    if block_action == BlockAction::Return {
-        if_stmts.push(state.mk_return_stmt(Some(state.mk_undefined())));
-    }
-
-    Ok(state.mk_iife(if_stmts))
 }
 
 /// Handle macro expressions
@@ -2470,7 +2823,8 @@ fn convert_for_to_stmt_enhanced(
             state.declare_variable(item_var, js_item_var.clone(), false);
 
             let iterable = rust_expr_to_js_with_state(&collection_expr, state)?;
-            let body_stmts = rust_block_to_js_with_state(BlockAction::NoReturn, &for_expr.body, state)?;
+            let body_stmts =
+                rust_block_to_js_with_state(BlockAction::NoReturn, &for_expr.body, state)?;
 
             // Generate: let i = 0; for (const item of collection) { body; i++; }
             let mut stmts = vec![
