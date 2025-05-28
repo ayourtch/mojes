@@ -695,11 +695,25 @@ pub fn rust_expr_to_js_with_state(
         // Handle match expressions
         Expr::Match(match_expr) => handle_match_expr(match_expr, state),
 
+        Expr::Paren(paren) => handle_paren_expr(paren, state),
+
         _ => {
-            state.add_warning(format!("Unsupported expression type: {:?}", expr));
+            state.add_error(format!("Unsupported expression type: {:?}", expr));
             Ok(state.mk_str_lit(&format!("/* Unsupported expression: {:?} */", &expr)))
         }
     }
+}
+
+// Parenthesized expressions
+pub fn handle_paren_expr(
+    paren: &syn::ExprParen,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    let inner = rust_expr_to_js_with_state(&paren.expr, state)?;
+    Ok(js::Expr::Paren(js::ParenExpr {
+        span: DUMMY_SP,
+        expr: Box::new(inner),
+    }))
 }
 
 // Continuation of lib.rs - Helper functions
@@ -2232,14 +2246,7 @@ pub fn rust_expr_to_js_with_state_complete(
         Expr::Struct(struct_expr) => handle_struct_expr(struct_expr, state),
         Expr::Range(range_expr) => handle_range_expr(range_expr, state),
 
-        Expr::Paren(paren) => {
-            // Parenthesized expressions
-            let inner = rust_expr_to_js_with_state(&paren.expr, state)?;
-            Ok(js::Expr::Paren(js::ParenExpr {
-                span: DUMMY_SP,
-                expr: Box::new(inner),
-            }))
-        }
+        Expr::Paren(paren) => handle_paren_expr(paren, state),
 
         Expr::Break(break_expr) => {
             if let Some(value) = &break_expr.expr {
@@ -2280,6 +2287,8 @@ pub fn rust_expr_to_js_with_state_complete(
                 elems: js_elements,
             }))
         }
+
+        Expr::Paren(paren) => handle_paren_expr(paren, state),
 
         _ => {
             state.add_warning(format!("Unsupported expression type: {:?}", expr));
