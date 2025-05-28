@@ -1,49 +1,292 @@
+use swc_common::{DUMMY_SP, SyntaxContext};
+use swc_ecma_ast as js;
+use swc_ecma_codegen;
+use std::collections::HashMap;
 use syn::punctuated::Punctuated;
 use syn::token::Comma;
 use syn::{Block, Expr, Fields, ItemEnum, ItemStruct, Pat, Stmt, Type};
-
 use syn::{FnArg, ImplItem, ItemImpl, ReturnType, Signature};
 
+/// Transpiler state for managing context and symbols during translation
+pub struct TranspilerState {
+    /// Symbol table for variable name mapping and type tracking
+    symbol_table: HashMap<String, SymbolInfo>,
+    /// Stack of scopes for proper variable resolution
+    scope_stack: Vec<HashMap<String, String>>,
+    /// Collected errors during transpilation
+    errors: Vec<String>,
+    /// Collected warnings during transpilation
+    warnings: Vec<String>,
+    /// Counter for generating unique temporary variable names
+    temp_var_counter: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct SymbolInfo {
+    pub js_name: String,
+    pub rust_type: String,
+    pub is_mutable: bool,
+}
+
+impl TranspilerState {
+    pub fn new() -> Self {
+        TranspilerState {
+            symbol_table: HashMap::new(),
+            scope_stack: vec![HashMap::new()], // Start with global scope
+            errors: Vec::new(),
+            warnings: Vec::new(),
+            temp_var_counter: 0,
+        }
+    }
+
+    pub fn enter_scope(&mut self) {
+        self.scope_stack.push(HashMap::new());
+    }
+
+    pub fn exit_scope(&mut self) {
+        self.scope_stack.pop();
+    }
+
+    pub fn declare_variable(&mut self, rust_name: String, js_name: String, is_mutable: bool) {
+        if let Some(current_scope) = self.scope_stack.last_mut() {
+            current_scope.insert(rust_name.clone(), js_name.clone());
+        }
+        self.symbol_table.insert(rust_name, SymbolInfo {
+            js_name,
+            rust_type: "unknown".to_string(),
+            is_mutable,
+        });
+    }
+
+    pub fn resolve_variable(&self, rust_name: &str) -> Option<String> {
+        // Check scopes from innermost to outermost
+        for scope in self.scope_stack.iter().rev() {
+            if let Some(js_name) = scope.get(rust_name) {
+                return Some(js_name.clone());
+            }
+        }
+        
+        // Fallback to symbol table
+        self.symbol_table.get(rust_name).map(|info| info.js_name.clone())
+    }
+
+    pub fn add_error(&mut self, error_message: String) {
+        self.errors.push(error_message);
+    }
+
+    pub fn add_warning(&mut self, warning_message: String) {
+        self.warnings.push(warning_message);
+    }
+
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
+    }
+
+    pub fn get_errors(&self) -> &Vec<String> {
+        &self.errors
+    }
+
+    pub fn get_warnings(&self) -> &Vec<String> {
+        &self.warnings
+    }
+
+    pub fn generate_temp_var(&mut self) -> String {
+        self.temp_var_counter += 1;
+        format!("_temp{}", self.temp_var_counter)
+    }
+
+    // Helper methods for creating common AST nodes
+    pub fn mk_ident(&self, name: &str) -> js::Ident {
+        js::Ident::new(name.into(), DUMMY_SP, SyntaxContext::empty())
+    }
+
+    pub fn mk_str_lit(&self, value: &str) -> js::Expr {
+        js::Expr::Lit(js::Lit::Str(js::Str {
+            span: DUMMY_SP,
+            value: value.into(),
+            raw: None,
+        }))
+    }
+
+    pub fn mk_num_lit(&self, value: f64) -> js::Expr {
+        js::Expr::Lit(js::Lit::Num(js::Number {
+            span: DUMMY_SP,
+            value,
+            raw: None,
+        }))
+    }
+
+    pub fn mk_bool_lit(&self, value: bool) -> js::Expr {
+        js::Expr::Lit(js::Lit::Bool(js::Bool {
+            span: DUMMY_SP,
+            value,
+        }))
+    }
+
+    pub fn mk_null_lit(&self) -> js::Expr {
+        js::Expr::Lit(js::Lit::Null(js::Null { span: DUMMY_SP }))
+    }
+
+    pub fn mk_undefined(&self) -> js::Expr {
+        js::Expr::Ident(self.mk_ident("undefined"))
+    }
+
+    pub fn mk_this_expr(&self) -> js::Expr {
+        js::Expr::This(js::ThisExpr { span: DUMMY_SP })
+    }
+
+    pub fn mk_member_expr(&self, obj: js::Expr, prop: &str) -> js::Expr {
+        js::Expr::Member(js::MemberExpr {
+            span: DUMMY_SP,
+            obj: Box::new(obj),
+            prop: js::MemberProp::Ident(self.mk_ident(prop)),
+        })
+    }
+
+    pub fn mk_call_expr(&self, callee: js::Expr, args: Vec<js::Expr>) -> js::Expr {
+        let js_args: Vec<js::ExprOrSpread> = args
+            .into_iter()
+            .map(|expr| js::ExprOrSpread {
+                spread: None,
+                expr: Box::new(expr),
+            })
+            .collect();
+
+        js::Expr::Call(js::CallExpr {
+            span: DUMMY_SP,
+            callee: js::Callee::Expr(Box::new(callee)),
+            args: js_args,
+            type_args: None,
+            ctxt: SyntaxContext::empty(),
+        })
+    }
+
+    pub fn mk_iife(&self, stmts: Vec<js::Stmt>) -> js::Expr {
+        let body = js::BlockStmt {
+            span: DUMMY_SP,
+            stmts,
+            ctxt: SyntaxContext::empty(),
+        };
+
+        let arrow_fn = js::ArrowExpr {
+            span: DUMMY_SP,
+            params: vec![],
+            body: Box::new(js::BlockStmtOrExpr::BlockStmt(body)),
+            is_async: false,
+            is_generator: false,
+            type_params: None,
+            return_type: None,
+            ctxt: SyntaxContext::empty(),
+        };
+
+        self.mk_call_expr(js::Expr::Arrow(arrow_fn), vec![])
+    }
+
+    pub fn mk_var_decl(&self, name: &str, init: Option<js::Expr>, is_const: bool) -> js::Stmt {
+        let kind = if is_const {
+            js::VarDeclKind::Const
+        } else {
+            js::VarDeclKind::Let
+        };
+
+        js::Stmt::Decl(js::Decl::Var(Box::new(js::VarDecl {
+            span: DUMMY_SP,
+            kind,
+            declare: false,
+            decls: vec![js::VarDeclarator {
+                span: DUMMY_SP,
+                name: js::Pat::Ident(js::BindingIdent {
+                    id: self.mk_ident(name),
+                    type_ann: None,
+                }),
+                init: init.map(Box::new),
+                definite: false,
+            }],
+            ctxt: SyntaxContext::empty(),
+        })))
+    }
+
+    pub fn mk_return_stmt(&self, arg: Option<js::Expr>) -> js::Stmt {
+        js::Stmt::Return(js::ReturnStmt {
+            span: DUMMY_SP,
+            arg: arg.map(Box::new),
+        })
+    }
+
+    pub fn mk_expr_stmt(&self, expr: js::Expr) -> js::Stmt {
+        js::Stmt::Expr(js::ExprStmt {
+            span: DUMMY_SP,
+            expr: Box::new(expr),
+        })
+    }
+
+    pub fn mk_binary_expr(&self, left: js::Expr, op: js::BinaryOp, right: js::Expr) -> js::Expr {
+        js::Expr::Bin(js::BinExpr {
+            span: DUMMY_SP,
+            op,
+            left: Box::new(left),
+            right: Box::new(right),
+        })
+    }
+
+    pub fn mk_template_literal(&self, parts: Vec<String>, exprs: Vec<js::Expr>) -> js::Expr {
+        let quasis: Vec<js::TplElement> = parts
+            .into_iter()
+            .enumerate()
+            .map(|(i, part)| js::TplElement {
+                span: DUMMY_SP,
+                tail: i == parts.len() - 1,
+                cooked: Some(part.into()),
+                raw: None,
+            })
+            .collect();
+
+        js::Expr::Tpl(js::Tpl {
+            span: DUMMY_SP,
+            exprs: exprs.into_iter().map(Box::new).collect(),
+            quasis,
+        })
+    }
+}
+
 /// Generate JavaScript methods for a Rust impl block
-pub fn generate_js_methods_for_impl(input_impl: &ItemImpl) -> String {
+pub fn generate_js_methods_for_impl(input_impl: &ItemImpl) -> Result<Vec<js::ModuleItem>, String> {
+    let mut state = TranspilerState::new();
+    
     let struct_name = if let syn::Type::Path(type_path) = &*input_impl.self_ty {
         if let Some(segment) = type_path.path.segments.last() {
             segment.ident.to_string()
         } else {
-            return "/* Could not determine struct name */".to_string();
+            return Err("Could not determine struct name".to_string());
         }
     } else {
-        return "/* Invalid impl type */".to_string();
+        return Err("Invalid impl type".to_string());
     };
 
-    let mut js_methods = String::new();
-
-    // Add methods to the prototype
-    js_methods.push_str(&format!("// Methods for {}\n", struct_name));
+    let mut js_items = Vec::new();
 
     for item in &input_impl.items {
         if let ImplItem::Fn(method) = item {
-            let method_js = generate_js_method(&struct_name, method);
-            js_methods.push_str(&method_js);
-            js_methods.push_str("\n\n");
+            match generate_js_method(&struct_name, method, &mut state) {
+                Ok(method_item) => js_items.push(method_item),
+                Err(e) => state.add_error(e),
+            }
         }
     }
 
-    js_methods
-}
+    if state.has_errors() {
+        return Err(format!("Transpilation errors: {:?}", state.get_errors()));
+    }
 
-// Add this new function to mojes-mojo/src/lib.rs
-// Insert before the generate_js_methods_for_impl function
-
-/// Convert method body to JavaScript with proper self -> this conversion
-fn rust_method_body_to_js(block: &syn::Block) -> String {
-    // We can reuse rust_block_to_js since we've updated rust_expr_to_js
-    // to handle self -> this conversion at the expression level
-    rust_block_to_js(block)
+    Ok(js_items)
 }
 
 /// Generate JavaScript method for a single Rust method
-fn generate_js_method(struct_name: &str, method: &syn::ImplItemFn) -> String {
+fn generate_js_method(
+    struct_name: &str,
+    method: &syn::ImplItemFn,
+    state: &mut TranspilerState,
+) -> Result<js::ModuleItem, String> {
     let method_name = method.sig.ident.to_string();
     let sig = &method.sig;
 
@@ -54,7 +297,7 @@ fn generate_js_method(struct_name: &str, method: &syn::ImplItemFn) -> String {
         .any(|arg| matches!(arg, FnArg::Receiver(_)));
 
     // Extract non-self parameters
-    let params: Vec<String> = sig
+    let params: Vec<js::Pat> = sig
         .inputs
         .iter()
         .filter_map(|arg| {
@@ -62,7 +305,10 @@ fn generate_js_method(struct_name: &str, method: &syn::ImplItemFn) -> String {
                 FnArg::Receiver(_) => None, // Skip self
                 FnArg::Typed(pat_type) => {
                     if let Pat::Ident(pat_ident) = &*pat_type.pat {
-                        Some(pat_ident.ident.to_string())
+                        Some(js::Pat::Ident(js::BindingIdent {
+                            id: state.mk_ident(&pat_ident.ident.to_string()),
+                            type_ann: None,
+                        }))
                     } else {
                         None
                     }
@@ -71,298 +317,900 @@ fn generate_js_method(struct_name: &str, method: &syn::ImplItemFn) -> String {
         })
         .collect();
 
-    // Convert method body to JavaScript with self
-    let body_js = rust_method_body_to_js(&method.block);
+    // Convert method body to JavaScript
+    let body_stmts = rust_block_to_js(&method.block, state)?;
+    let body = js::BlockStmt {
+        span: DUMMY_SP,
+        stmts: body_stmts,
+        ctxt: SyntaxContext::empty(),
+    };
 
-    // Generate appropriate JavaScript method
-    if is_static {
-        // Static method
-        format!(
-            "{}.{} = function({}) {{\n{}}};",
-            struct_name,
-            method_name,
-            params.join(", "),
-            body_js
+    let function = js::Function {
+        params,
+        decorators: vec![],
+        span: DUMMY_SP,
+        body: Some(body),
+        is_generator: false,
+        is_async: false,
+        type_params: None,
+        return_type: None,
+        ctxt: SyntaxContext::empty(),
+    };
+
+    // Create the assignment statement
+    let target = if is_static {
+        // Static method: StructName.methodName
+        state.mk_member_expr(
+            js::Expr::Ident(state.mk_ident(struct_name)),
+            &method_name,
         )
     } else {
-        // Instance method
-        format!(
-            "{}.prototype.{} = function({}) {{\n{}}};",
-            struct_name,
-            method_name,
-            params.join(", "),
-            body_js
-        )
-    }
-}
-// Handle binary operations
-fn handle_binary_op(bin: &syn::ExprBinary) -> String {
-    let left = rust_expr_to_js(&bin.left);
-    let right = rust_expr_to_js(&bin.right);
+        // Instance method: StructName.prototype.methodName
+        let prototype = state.mk_member_expr(
+            js::Expr::Ident(state.mk_ident(struct_name)),
+            "prototype",
+        );
+        state.mk_member_expr(prototype, &method_name)
+    };
 
-    match &bin.op {
-        syn::BinOp::Add(_) => {
-            // Special case for string concatenation
-            if is_string_expr(&bin.left) || is_string_expr(&bin.right) {
-                format!("`${{{}}}${{{}}}`", left, right)
-            } else {
-                format!("{} + {}", left, right)
+    let assignment = js::Expr::Assign(js::AssignExpr {
+        span: DUMMY_SP,
+        op: js::AssignOp::Assign,
+        left: js::PatOrExpr::Expr(Box::new(target)),
+        right: Box::new(js::Expr::Fn(js::FnExpr {
+            ident: None,
+            function: Box::new(function),
+        })),
+    });
+
+    Ok(js::ModuleItem::Stmt(js::Stmt::Expr(js::ExprStmt {
+        span: DUMMY_SP,
+        expr: Box::new(assignment),
+    })))
+}
+
+/// Convert Rust block to JavaScript statements
+pub fn rust_block_to_js(block: &Block, state: &mut TranspilerState) -> Result<Vec<js::Stmt>, String> {
+    let mut js_stmts = Vec::new();
+    
+    state.enter_scope();
+
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::Local(local) => {
+                let js_stmt = handle_local_statement(local, state)?;
+                js_stmts.push(js_stmt);
+            }
+            Stmt::Expr(expr, semi) => {
+                let js_expr = rust_expr_to_js(expr, state)?;
+                
+                if semi.is_some() {
+                    // Expression with semicolon - treat as statement
+                    js_stmts.push(state.mk_expr_stmt(js_expr));
+                } else {
+                    // Expression without semicolon - likely a return expression
+                    js_stmts.push(state.mk_return_stmt(Some(js_expr)));
+                }
+            }
+            Stmt::Macro(mac_stmt) => {
+                let js_expr = handle_macro_expr(&mac_stmt.mac, state)?;
+                js_stmts.push(state.mk_expr_stmt(js_expr));
+            }
+            _ => {
+                state.add_warning(format!("Unsupported statement type: {:?}", stmt));
             }
         }
-        syn::BinOp::Sub(_) => format!("{} - {}", left, right),
-        syn::BinOp::Mul(_) => format!("{} * {}", left, right),
-        syn::BinOp::Div(_) => format!("{} / {}", left, right),
-        syn::BinOp::Rem(_) => format!("{} % {}", left, right),
-        syn::BinOp::And(_) => format!("{} && {}", left, right),
-        syn::BinOp::Or(_) => format!("{} || {}", left, right),
-        syn::BinOp::BitXor(_) => format!("{} ^ {}", left, right),
-        syn::BinOp::BitAnd(_) => format!("{} & {}", left, right),
-        syn::BinOp::BitOr(_) => format!("{} | {}", left, right),
-        syn::BinOp::Shl(_) => format!("{} << {}", left, right),
-        syn::BinOp::Shr(_) => format!("{} >> {}", left, right),
-        syn::BinOp::Eq(_) => format!("{} === {}", left, right),
-        syn::BinOp::Lt(_) => format!("{} < {}", left, right),
-        syn::BinOp::Le(_) => format!("{} <= {}", left, right),
-        syn::BinOp::Ne(_) => format!("{} !== {}", left, right),
-        syn::BinOp::Ge(_) => format!("{} >= {}", left, right),
-        syn::BinOp::Gt(_) => format!("{} > {}", left, right),
+    }
 
-        syn::BinOp::AddAssign(_) => format!("{} += {}", left, right), // Handle +=
-        syn::BinOp::SubAssign(_) => format!("{} -= {}", left, right), // Handle -=
-        syn::BinOp::MulAssign(_) => format!("{} *= {}", left, right), // Handle *=
-        syn::BinOp::DivAssign(_) => format!("{} /= {}", left, right), // Handle /=
-        syn::BinOp::RemAssign(_) => format!("{} %= {}", left, right), // Handle %=
-        syn::BinOp::BitXorAssign(_) => format!("{} ^= {}", left, right), // Handle ^=
-        syn::BinOp::BitAndAssign(_) => format!("{} &= {}", left, right), // Handle &=
-        syn::BinOp::BitOrAssign(_) => format!("{} |= {}", left, right), // Handle |=
-        syn::BinOp::ShlAssign(_) => format!("{} <<= {}", left, right), // Handle <<=
-        syn::BinOp::ShrAssign(_) => format!("{} >>= {}", left, right), // Handle >>=
+    state.exit_scope();
+    Ok(js_stmts)
+}
 
-        x => format!("/* {:?} */ {} + {}", x, left, right), // Default fallback
+/// Convert Rust expression to JavaScript expression
+pub fn rust_expr_to_js(expr: &Expr, state: &mut TranspilerState) -> Result<js::Expr, String> {
+    match expr {
+        // Handle literals
+        Expr::Lit(lit) => match &lit.lit {
+            syn::Lit::Str(s) => Ok(state.mk_str_lit(&s.value())),
+            syn::Lit::Int(i) => {
+                let value = i.base10_parse::<f64>()
+                    .map_err(|e| format!("Failed to parse integer: {}", e))?;
+                Ok(state.mk_num_lit(value))
+            }
+            syn::Lit::Float(f) => {
+                let value = f.base10_parse::<f64>()
+                    .map_err(|e| format!("Failed to parse float: {}", e))?;
+                Ok(state.mk_num_lit(value))
+            }
+            syn::Lit::Bool(b) => Ok(state.mk_bool_lit(b.value())),
+            syn::Lit::Char(c) => Ok(state.mk_str_lit(&c.value().to_string())),
+            _ => Err("Unsupported literal type".to_string()),
+        },
+        
+        // Handle paths (variables, constants)
+        Expr::Path(path) => {
+            if let Some(last_segment) = path.path.segments.last() {
+                let ident_str = last_segment.ident.to_string();
+                
+                match ident_str.as_str() {
+                    "self" => Ok(state.mk_this_expr()),
+                    "None" => Ok(state.mk_null_lit()),
+                    "true" | "false" => Ok(js::Expr::Ident(state.mk_ident(&ident_str))),
+                    _ => {
+                        // Try to resolve variable
+                        let js_name = state.resolve_variable(&ident_str)
+                            .unwrap_or_else(|| escape_js_identifier(&ident_str));
+                        Ok(js::Expr::Ident(state.mk_ident(&js_name)))
+                    }
+                }
+            } else {
+                Err("Invalid path expression".to_string())
+            }
+        }
+
+        // Handle binary operations
+        Expr::Binary(bin) => {
+            let left = rust_expr_to_js(&bin.left, state)?;
+            let right = rust_expr_to_js(&bin.right, state)?;
+
+            let js_op = match &bin.op {
+                syn::BinOp::Add(_) => {
+                    // Check for string concatenation
+                    if is_string_expr(&bin.left) || is_string_expr(&bin.right) {
+                        // Use template literal for string concatenation
+                        return Ok(state.mk_template_literal(
+                            vec!["".to_string(), "".to_string()],
+                            vec![left, right],
+                        ));
+                    } else {
+                        js::BinaryOp::Add
+                    }
+                }
+                syn::BinOp::Sub(_) => js::BinaryOp::Sub,
+                syn::BinOp::Mul(_) => js::BinaryOp::Mul,
+                syn::BinOp::Div(_) => js::BinaryOp::Div,
+                syn::BinOp::Rem(_) => js::BinaryOp::Mod,
+                syn::BinOp::And(_) => js::BinaryOp::LogicalAnd,
+                syn::BinOp::Or(_) => js::BinaryOp::LogicalOr,
+                syn::BinOp::BitXor(_) => js::BinaryOp::BitXor,
+                syn::BinOp::BitAnd(_) => js::BinaryOp::BitAnd,
+                syn::BinOp::BitOr(_) => js::BinaryOp::BitOr,
+                syn::BinOp::Shl(_) => js::BinaryOp::LShift,
+                syn::BinOp::Shr(_) => js::BinaryOp::RShift,
+                syn::BinOp::Eq(_) => js::BinaryOp::EqEqEq,
+                syn::BinOp::Lt(_) => js::BinaryOp::Lt,
+                syn::BinOp::Le(_) => js::BinaryOp::LtEq,
+                syn::BinOp::Ne(_) => js::BinaryOp::NotEqEq,
+                syn::BinOp::Ge(_) => js::BinaryOp::GtEq,
+                syn::BinOp::Gt(_) => js::BinaryOp::Gt,
+                _ => return Err("Unsupported binary operator".to_string()),
+            };
+
+            Ok(state.mk_binary_expr(left, js_op, right))
+        }
+
+        // Handle unary operations
+        Expr::Unary(unary) => {
+            let operand = rust_expr_to_js(&unary.expr, state)?;
+            let js_op = match &unary.op {
+                syn::UnOp::Not(_) => js::UnaryOp::Bang,
+                syn::UnOp::Neg(_) => js::UnaryOp::Minus,
+                syn::UnOp::Deref(_) => return Ok(operand), // Dereference is no-op in JS
+            };
+
+            Ok(js::Expr::Unary(js::UnaryExpr {
+                span: DUMMY_SP,
+                op: js_op,
+                arg: Box::new(operand),
+            }))
+        }
+
+        // Handle method calls
+        Expr::MethodCall(method_call) => {
+            handle_method_call(method_call, state)
+        }
+
+        // Handle function calls
+        Expr::Call(call) => {
+            handle_function_call(call, state)
+        }
+
+        // Handle field access
+        Expr::Field(field) => {
+            let base = rust_expr_to_js(&field.base, state)?;
+            let member_name = match &field.member {
+                syn::Member::Named(ident) => ident.to_string(),
+                syn::Member::Unnamed(index) => index.index.to_string(),
+            };
+
+            Ok(state.mk_member_expr(base, &member_name))
+        }
+
+        // Handle if expressions
+        Expr::If(if_expr) => {
+            handle_if_expr(if_expr, state)
+        }
+
+        // Handle block expressions
+        Expr::Block(block_expr) => {
+            let stmts = rust_block_to_js(&block_expr.block, state)?;
+            Ok(state.mk_iife(stmts))
+        }
+
+        // Handle array literals
+        Expr::Array(array) => {
+            let elements: Result<Vec<_>, _> = array
+                .elems
+                .iter()
+                .map(|elem| rust_expr_to_js(elem, state))
+                .collect();
+
+            let js_elements: Vec<Option<js::ExprOrSpread>> = elements?
+                .into_iter()
+                .map(|expr| Some(js::ExprOrSpread {
+                    spread: None,
+                    expr: Box::new(expr),
+                }))
+                .collect();
+
+            Ok(js::Expr::Array(js::ArrayLit {
+                span: DUMMY_SP,
+                elems: js_elements,
+            }))
+        }
+
+        // Handle index expressions
+        Expr::Index(index) => {
+            let obj = rust_expr_to_js(&index.expr, state)?;
+            let prop = rust_expr_to_js(&index.index, state)?;
+
+            Ok(js::Expr::Member(js::MemberExpr {
+                span: DUMMY_SP,
+                obj: Box::new(obj),
+                prop: js::MemberProp::Computed(js::ComputedPropName {
+                    span: DUMMY_SP,
+                    expr: Box::new(prop),
+                }),
+            }))
+        }
+
+        // Handle assignments
+        Expr::Assign(assign) => {
+            let left = rust_expr_to_js(&assign.left, state)?;
+            let right = rust_expr_to_js(&assign.right, state)?;
+
+            Ok(js::Expr::Assign(js::AssignExpr {
+                span: DUMMY_SP,
+                op: js::AssignOp::Assign,
+                left: js::PatOrExpr::Expr(Box::new(left)),
+                right: Box::new(right),
+            }))
+        }
+
+        // Handle return expressions
+        Expr::Return(ret) => {
+            if let Some(return_expr) = &ret.expr {
+                let js_expr = rust_expr_to_js(return_expr, state)?;
+                // Return expressions in JavaScript are statements, not expressions
+                // We'll handle this at the statement level
+                Ok(js_expr)
+            } else {
+                Ok(state.mk_undefined())
+            }
+        }
+
+        // Handle macro expressions
+        Expr::Macro(macro_expr) => {
+            handle_macro_expr(&macro_expr.mac, state)
+        }
+
+        _ => {
+            state.add_warning(format!("Unsupported expression type: {:?}", expr));
+            Ok(state.mk_str_lit("/* Unsupported expression */"))
+        }
     }
 }
 
-/*
-// Add a separate function to handle assignment operators
-fn handle_assignment_op(expr: &syn::ExprAssign) -> String {
-    let left = rust_expr_to_js(&expr.left);
-    let right = rust_expr_to_js(&expr.right);
 
-    match &expr.op {
-        syn::BinOp::Add(_) => format!("{} += {}", left, right),
-        syn::BinOp::Sub(_) => format!("{} -= {}", left, right),
-        syn::BinOp::Mul(_) => format!("{} *= {}", left, right),
-        syn::BinOp::Div(_) => format!("{} /= {}", left, right),
-        syn::BinOp::Rem(_) => format!("{} %= {}", left, right),
-        syn::BinOp::BitXor(_) => format!("{} ^= {}", left, right),
-        syn::BinOp::BitAnd(_) => format!("{} &= {}", left, right),
-        syn::BinOp::BitOr(_) => format!("{} |= {}", left, right),
-        syn::BinOp::Shl(_) => format!("{} <<= {}", left, right),
-        syn::BinOp::Shr(_) => format!("{} >>= {}", left, right),
-        _ => format!("{} = {}", left, right), // Default fallback
+// Continuation of lib.rs - Helper functions
+
+/// Handle method calls
+fn handle_method_call(
+    method_call: &syn::ExprMethodCall,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    let receiver = rust_expr_to_js(&method_call.receiver, state)?;
+    let method_name = method_call.method.to_string();
+
+    // Convert arguments
+    let args: Result<Vec<_>, _> = method_call
+        .args
+        .iter()
+        .map(|arg| rust_expr_to_js(arg, state))
+        .collect();
+    let js_args = args?;
+
+    // Handle special method mappings
+    match method_name.as_str() {
+        "len" | "count" => {
+            // .len() becomes .length property access
+            Ok(state.mk_member_expr(receiver, "length"))
+        }
+        "clone" => {
+            // .clone() is typically a no-op in JavaScript for primitives
+            Ok(receiver)
+        }
+        "push" => {
+            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "push"), js_args))
+        }
+        "pop" => {
+            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "pop"), js_args))
+        }
+        "contains" => {
+            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "includes"), js_args))
+        }
+        "to_string" => {
+            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "toString"), js_args))
+        }
+        "to_uppercase" => {
+            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "toUpperCase"), js_args))
+        }
+        "to_lowercase" => {
+            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "toLowerCase"), js_args))
+        }
+        "trim" => {
+            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "trim"), js_args))
+        }
+        "starts_with" => {
+            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "startsWith"), js_args))
+        }
+        "ends_with" => {
+            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "endsWith"), js_args))
+        }
+        "replace" => {
+            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "replace"), js_args))
+        }
+        "split" => {
+            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "split"), js_args))
+        }
+        "join" => {
+            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "join"), js_args))
+        }
+        "map" => {
+            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "map"), js_args))
+        }
+        "filter" => {
+            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "filter"), js_args))
+        }
+        "find" => {
+            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "find"), js_args))
+        }
+        "iter" => {
+            // .iter() is typically a no-op in JavaScript
+            Ok(receiver)
+        }
+        "collect" => {
+            // .collect() is typically a no-op in JavaScript
+            Ok(receiver)
+        }
+        "is_some" => {
+            // Option::is_some() -> value !== null && value !== undefined
+            let null_check = state.mk_binary_expr(
+                receiver.clone(),
+                js::BinaryOp::NotEqEq,
+                state.mk_null_lit(),
+            );
+            let undefined_check = state.mk_binary_expr(
+                receiver,
+                js::BinaryOp::NotEqEq,
+                state.mk_undefined(),
+            );
+            Ok(state.mk_binary_expr(null_check, js::BinaryOp::LogicalAnd, undefined_check))
+        }
+        "is_none" => {
+            // Option::is_none() -> value === null || value === undefined
+            let null_check = state.mk_binary_expr(
+                receiver.clone(),
+                js::BinaryOp::EqEqEq,
+                state.mk_null_lit(),
+            );
+            let undefined_check = state.mk_binary_expr(
+                receiver,
+                js::BinaryOp::EqEqEq,
+                state.mk_undefined(),
+            );
+            Ok(state.mk_binary_expr(null_check, js::BinaryOp::LogicalOr, undefined_check))
+        }
+        "unwrap" => {
+            // .unwrap() is just the value itself in JavaScript
+            Ok(receiver)
+        }
+        _ => {
+            // Default method call
+            Ok(state.mk_call_expr(state.mk_member_expr(receiver, &method_name), js_args))
+        }
     }
 }
-*/
 
-// Add a proper macro handler function - particularly for format!
+/// Handle function calls
+fn handle_function_call(
+    call: &syn::ExprCall,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    // Convert arguments
+    let args: Result<Vec<_>, _> = call
+        .args
+        .iter()
+        .map(|arg| rust_expr_to_js(arg, state))
+        .collect();
+    let js_args = args?;
 
-fn handle_macro_expr(mac: &syn::Macro) -> String {
-    // Get the macro name
+    // Handle the function being called
+    match &*call.func {
+        Expr::Path(path) => {
+            if let Some(last_segment) = path.path.segments.last() {
+// Continuation of handle_function_call and other helper functions
+
+                let func_name = last_segment.ident.to_string();
+                
+                match func_name.as_str() {
+                    "println" | "print" => {
+                        let console_log = state.mk_member_expr(
+                            js::Expr::Ident(state.mk_ident("console")),
+                            "log",
+                        );
+                        Ok(state.mk_call_expr(console_log, js_args))
+                    }
+                    "eprintln" | "eprint" => {
+                        let console_error = state.mk_member_expr(
+                            js::Expr::Ident(state.mk_ident("console")),
+                            "error",
+                        );
+                        Ok(state.mk_call_expr(console_error, js_args))
+                    }
+                    "format" => {
+                        // Handle format! macro as function call
+                        handle_format_macro(&call.args, state)
+                    }
+                    "Some" => {
+                        // Option::Some just returns the value in JavaScript
+                        if js_args.len() == 1 {
+                            Ok(js_args.into_iter().next().unwrap())
+                        } else {
+                            Err(format!("Some() expects exactly one argument, got {}", js_args.len()))
+                        }
+                    }
+                    _ => {
+                        // Regular function call
+                        let callee = js::Expr::Ident(state.mk_ident(&func_name));
+                        Ok(state.mk_call_expr(callee, js_args))
+                    }
+                }
+            } else {
+                Err("Invalid function path".to_string())
+            }
+        }
+        _ => {
+            // Complex function expression
+            let callee = rust_expr_to_js(&call.func, state)?;
+            Ok(state.mk_call_expr(callee, js_args))
+        }
+    }
+}
+
+/// Handle if expressions
+fn handle_if_expr(
+    if_expr: &syn::ExprIf,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    let test = rust_expr_to_js(&if_expr.cond, state)?;
+    let consequent_stmts = rust_block_to_js(&if_expr.then_branch, state)?;
+    
+    let mut if_stmts = vec![
+        js::Stmt::If(js::IfStmt {
+            span: DUMMY_SP,
+            test: Box::new(test),
+            cons: Box::new(js::Stmt::Block(js::BlockStmt {
+                span: DUMMY_SP,
+                stmts: consequent_stmts,
+                ctxt: SyntaxContext::empty(),
+            })),
+            alt: None,
+        })
+    ];
+
+    // Handle else branch
+    if let Some((_, else_branch)) = &if_expr.else_branch {
+        let else_stmts = match &**else_branch {
+            Expr::Block(else_block) => rust_block_to_js(&else_block.block, state)?,
+            Expr::If(_) => {
+                // Handle else if
+                let else_if_expr = rust_expr_to_js(else_branch, state)?;
+                vec![state.mk_expr_stmt(else_if_expr)]
+            }
+            _ => {
+                let else_expr = rust_expr_to_js(else_branch, state)?;
+                vec![state.mk_return_stmt(Some(else_expr))]
+            }
+        };
+
+        // Update the if statement to include the else branch
+        if let js::Stmt::If(ref mut if_stmt) = if_stmts[0] {
+            if_stmt.alt = Some(Box::new(js::Stmt::Block(js::BlockStmt {
+                span: DUMMY_SP,
+                stmts: else_stmts,
+                ctxt: SyntaxContext::empty(),
+            })));
+        }
+    }
+
+    // Add a default return undefined
+    if_stmts.push(state.mk_return_stmt(Some(state.mk_undefined())));
+
+    Ok(state.mk_iife(if_stmts))
+}
+
+/// Handle macro expressions
+fn handle_macro_expr(
+    mac: &syn::Macro,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
     let macro_name = if let Some(segment) = mac.path.segments.last() {
         segment.ident.to_string()
     } else {
-        return "/* Invalid macro */".to_string();
+        return Err("Invalid macro".to_string());
     };
 
+    let tokens = mac.tokens.to_string();
+
     match macro_name.as_str() {
-        "format" => {
-            // Handle format! macro - just delegate to handle_format_like_macro
-            let tokens = &mac.tokens;
-            let token_string = tokens.to_string();
+        "println" | "print" => {
+            let console_method = if macro_name == "println" { "log" } else { "log" };
+            let console_expr = state.mk_member_expr(
+                js::Expr::Ident(state.mk_ident("console")),
+                console_method,
+            );
 
-            // Use the same logic as println! and other format-like macros
-            handle_format_like_macro(&token_string)
-        }
-        "println" => {
-            // Convert println! to console.log
-            let tokens = &mac.tokens;
-            let token_string = tokens.to_string();
-            eprintln!("DEBUG println! tokens: '{}'", token_string);
-
-            if token_string.trim().is_empty() {
-                // println!() with no arguments
-                "console.log()".to_string()
+            if tokens.trim().is_empty() {
+                Ok(state.mk_call_expr(console_expr, vec![]))
+            } else if tokens.contains("{}") {
+                // Format-style macro
+                let format_result = handle_format_like_macro(&tokens, state)?;
+                Ok(state.mk_call_expr(console_expr, vec![format_result]))
             } else {
-                // Handle println! with format string and arguments
-                if token_string.contains("{}") {
-                    // This is a format-style println!
-                    eprintln!("DEBUG: Detected format style println!");
-                    let format_result = handle_format_like_macro(&token_string);
-                    format!("console.log({})", format_result)
-                } else {
-                    // Simple println! with just a string or expression
-                    format!("console.log({})", token_string)
-                }
+                // Simple string or expression
+                let arg = parse_macro_tokens(&tokens, state)?;
+                Ok(state.mk_call_expr(console_expr, vec![arg]))
             }
         }
-
-        "print" => {
-            // Similar to println but without newline (JS console.log always adds newline though)
-            let tokens = &mac.tokens;
-            let token_string = tokens.to_string();
-
-            if token_string.trim().is_empty() {
-                "console.log()".to_string()
-            } else {
-                if token_string.contains("{}") {
-                    let format_result = handle_format_like_macro(&token_string);
-                    format!("console.log({})", format_result)
-                } else {
-                    format!("console.log({})", token_string)
-                }
-            }
-        }
-
         "eprintln" | "eprint" => {
-            // Convert to console.error for stderr output
-            let tokens = &mac.tokens;
-            let token_string = tokens.to_string();
+            let console_expr = state.mk_member_expr(
+                js::Expr::Ident(state.mk_ident("console")),
+                "error",
+            );
 
-            if token_string.trim().is_empty() {
-                "console.error()".to_string()
+            if tokens.trim().is_empty() {
+                Ok(state.mk_call_expr(console_expr, vec![]))
+            } else if tokens.contains("{}") {
+                let format_result = handle_format_like_macro(&tokens, state)?;
+                Ok(state.mk_call_expr(console_expr, vec![format_result]))
             } else {
-                if token_string.contains("{}") {
-                    let format_result = handle_format_like_macro(&token_string);
-                    format!("console.error({})", format_result)
-                } else {
-                    format!("console.error({})", token_string)
-                }
+                let arg = parse_macro_tokens(&tokens, state)?;
+                Ok(state.mk_call_expr(console_expr, vec![arg]))
             }
         }
-
+        "format" => {
+            handle_format_like_macro(&tokens, state)
+        }
         "vec" => {
-            // Handle vec! macro - convert to JavaScript array literal
-            let tokens = &mac.tokens;
-            let token_string = tokens.to_string();
-
-            if token_string.trim().is_empty() {
+            if tokens.trim().is_empty() {
                 // vec!() -> []
-                "[]".to_string()
-            } else if token_string.contains(";") {
+                Ok(js::Expr::Array(js::ArrayLit {
+                    span: DUMMY_SP,
+                    elems: vec![],
+                }))
+            } else if tokens.contains(';') {
                 // vec![value; count] -> Array.from({length: count}, () => value)
-                let parts: Vec<&str> = token_string.split(';').collect();
+                let parts: Vec<&str> = tokens.split(';').collect();
                 if parts.len() == 2 {
-                    let value = parts[0].trim();
-                    let count = parts[1].trim();
-                    format!("Array.from({{length: {}}}, () => {})", count, value)
+                    let value_expr = parse_macro_tokens(parts[0].trim(), state)?;
+                    let count_expr = parse_macro_tokens(parts[1].trim(), state)?;
+                    
+                    // Create Array.from call
+                    let array_from = state.mk_member_expr(
+                        js::Expr::Ident(state.mk_ident("Array")),
+                        "from",
+                    );
+                    
+                    // Create {length: count} object
+                    let length_obj = js::Expr::Object(js::ObjectLit {
+                        span: DUMMY_SP,
+                        props: vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(js::KeyValueProp {
+                            key: js::PropName::Ident(state.mk_ident("length")),
+                            value: Box::new(count_expr),
+                        })))],
+                    });
+                    
+                    // Create () => value arrow function
+                    let arrow_fn = js::ArrowExpr {
+                        span: DUMMY_SP,
+                        params: vec![],
+                        body: Box::new(js::BlockStmtOrExpr::Expr(Box::new(value_expr))),
+                        is_async: false,
+                        is_generator: false,
+                        type_params: None,
+                        return_type: None,
+                        ctxt: SyntaxContext::empty(),
+                    };
+                    
+                    Ok(state.mk_call_expr(array_from, vec![length_obj, js::Expr::Arrow(arrow_fn)]))
                 } else {
-                    format!("[{}]", token_string) // Fallback
+                    Err("Invalid vec! syntax with semicolon".to_string())
                 }
             } else {
                 // vec![a, b, c] -> [a, b, c]
-                let token_string = token_string.replace(" , ", ", ");
-                format!("[{}]", token_string)
+                let elements = parse_comma_separated_exprs(&tokens, state)?;
+                let js_elements: Vec<Option<js::ExprOrSpread>> = elements
+                    .into_iter()
+                    .map(|expr| Some(js::ExprOrSpread {
+                        spread: None,
+                        expr: Box::new(expr),
+                    }))
+                    .collect();
+
+                Ok(js::Expr::Array(js::ArrayLit {
+                    span: DUMMY_SP,
+                    elems: js_elements,
+                }))
             }
         }
-
-        x => panic!("/* Unsupported macro {} */", macro_name),
+        _ => Err(format!("Unsupported macro: {}", macro_name)),
     }
 }
 
-// Helper function to handle format-like macros (reusable for println!, etc.)
-
-fn handle_format_like_macro(token_string: &str) -> String {
-    eprintln!("DEBUG handle_format_like_macro input: '{}'", token_string);
-
-    // Smart comma splitting that respects quote boundaries
+/// Handle format-like macros (format!, println! with {}, etc.)
+fn handle_format_like_macro(
+    token_string: &str,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
     let parts = smart_comma_split(token_string);
-    eprintln!("DEBUG parts after smart split: {:?}", parts);
-
+    
     if parts.is_empty() {
-        return "\"\"".to_string();
+        return Ok(state.mk_str_lit(""));
     }
 
-    // Get the format string (remove quotes)
+    // Get the format string
     let mut format_str = parts[0].trim();
     if format_str.starts_with('"') && format_str.ends_with('"') {
         format_str = &format_str[1..format_str.len() - 1];
     }
-    eprintln!("DEBUG format_str: '{}'", format_str);
 
-    // Get format arguments and process them through the Rust->JS converter
-    let format_args: Vec<String> = parts
+    // Get format arguments
+    let format_args: Result<Vec<_>, _> = parts
         .iter()
         .skip(1)
-        .map(|arg| {
-            let trimmed_arg = arg.trim();
-            // Parse the argument as a Rust expression and convert it
-            if let Ok(parsed_expr) = syn::parse_str::<syn::Expr>(trimmed_arg) {
-                rust_expr_to_js(&parsed_expr)
-            } else {
-                // If parsing fails, use the original but do basic self->this replacement
-                if trimmed_arg.starts_with("self.") {
-                    trimmed_arg.replacen("self.", "this.", 1)
-                } else if trimmed_arg == "self" {
-                    "this".to_string()
-                } else {
-                    trimmed_arg.to_string()
-                }
-            }
-        })
+        .map(|arg| parse_macro_tokens(arg.trim(), state))
         .collect();
-    eprintln!("DEBUG format_args: {:?}", format_args);
+    let js_args = format_args?;
 
-    // Check if there are actually placeholders
+    // Check if there are placeholders
     if !format_str.contains("{}") {
-        // No placeholders, but still return template literal for consistency
-        // and to handle backtick escaping properly
-        let escaped_format_str = format_str.replace("`", "\\`");
-        return format!("`{}`", escaped_format_str);
+        return Ok(state.mk_str_lit(format_str));
     }
 
-    // Split the format string at each placeholder
+    // Split format string at placeholders
     let str_parts: Vec<&str> = format_str.split("{}").collect();
-    eprintln!("DEBUG str_parts: {:?}", str_parts);
-
-    // Combine the parts with the arguments using a template literal
-    let mut result = String::from("`");
-
+    
+    // Create template literal
+    let mut template_parts = Vec::new();
+    let mut template_exprs = Vec::new();
+    
     for (i, part) in str_parts.iter().enumerate() {
-        eprintln!("DEBUG processing part {}: '{}'", i, part);
-
-        // Escape backticks in the string parts
-        let escaped_part = part.replace("`", "\\`");
-        eprintln!("DEBUG escaped_part: '{}'", escaped_part);
-
-        result.push_str(&escaped_part);
-
-        // Add the argument if there is one for this placeholder
-        if i < format_args.len() {
-            result.push_str(&format!("${{{}}}", format_args[i]));
+        template_parts.push(part.to_string());
+        
+        if i < js_args.len() {
+            template_exprs.push(js_args[i].clone());
+        }
+    }
+    
+    // Handle the case where we have more parts than expressions
+    if template_parts.len() > template_exprs.len() + 1 {
+        // Add empty expressions for missing placeholders
+        while template_exprs.len() < template_parts.len() - 1 {
+            template_exprs.push(state.mk_str_lit(""));
         }
     }
 
-    result.push('`');
-    eprintln!("DEBUG final result: '{}'", result);
-    result
+    Ok(state.mk_template_literal(template_parts, template_exprs))
 }
 
-// Add this helper function to properly split on commas while respecting quotes
+/// Handle format! macro with parsed arguments
+fn handle_format_macro(
+    args: &Punctuated<Expr, Comma>,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    if args.is_empty() {
+        return Ok(state.mk_str_lit(""));
+    }
+
+    // Get the format string
+    if let Some(first_arg) = args.first() {
+        if let Expr::Lit(lit) = first_arg {
+            if let syn::Lit::Str(str_lit) = &lit.lit {
+                let format_str = str_lit.value();
+
+                if !format_str.contains("{}") {
+                    return Ok(state.mk_str_lit(&format_str));
+                }
+
+                // Get format arguments
+                let format_args: Result<Vec<_>, _> = args
+                    .iter()
+                    .skip(1)
+                    .map(|arg| rust_expr_to_js(arg, state))
+                    .collect();
+                let js_args = format_args?;
+
+                // Split format string at placeholders
+                let parts: Vec<&str> = format_str.split("{}").collect();
+                
+                // Create template literal
+                let template_parts: Vec<String> = parts.iter().map(|s| s.to_string()).collect();
+                
+                return Ok(state.mk_template_literal(template_parts, js_args));
+            }
+        }
+    }
+
+    // Fallback: concatenate arguments
+    let js_args: Result<Vec<_>, _> = args
+        .iter()
+        .map(|arg| rust_expr_to_js(arg, state))
+        .collect();
+    
+    let args_vec = js_args?;
+    if args_vec.len() == 1 {
+        Ok(args_vec.into_iter().next().unwrap())
+    } else {
+        // Join with spaces - this is a simplification
+        let joined = args_vec.into_iter().reduce(|acc, expr| {
+            state.mk_binary_expr(acc, js::BinaryOp::Add, state.mk_str_lit(" "));
+            state.mk_binary_expr(acc, js::BinaryOp::Add, expr)
+        }).unwrap_or_else(|| state.mk_str_lit(""));
+        
+        Ok(joined)
+    }
+}
+
+/// Handle local variable declarations
+fn handle_local_statement(
+    local: &syn::Local,
+    state: &mut TranspilerState,
+) -> Result<js::Stmt, String> {
+    if let Some(init) = &local.init {
+        let init_expr = rust_expr_to_js(&init.expr, state)?;
+
+        match &*local.pat {
+            Pat::Ident(pat_ident) => {
+                let var_name = pat_ident.ident.to_string();
+                let js_var_name = escape_js_identifier(&var_name);
+                let is_mutable = pat_ident.mutability.is_some();
+                
+                state.declare_variable(var_name, js_var_name.clone(), is_mutable);
+                
+                Ok(state.mk_var_decl(&js_var_name, Some(init_expr), !is_mutable))
+            }
+            Pat::Tuple(tuple_pat) => {
+                // Handle destructuring assignment
+                let var_names: Vec<String> = tuple_pat
+                    .elems
+                    .iter()
+                    .filter_map(|pat| {
+                        if let Pat::Ident(pat_ident) = pat {
+                            Some(pat_ident.ident.to_string())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                // Create array destructuring pattern
+                let destructure_pattern = js::Pat::Array(js::ArrayPat {
+                    span: DUMMY_SP,
+                    elems: var_names
+                        .iter()
+                        .map(|name| {
+                            let js_name = escape_js_identifier(name);
+                            state.declare_variable(name.clone(), js_name.clone(), false);
+                            Some(js::Pat::Ident(js::BindingIdent {
+                                id: state.mk_ident(&js_name),
+                                type_ann: None,
+                            }))
+                        })
+                        .collect(),
+                    optional: false,
+                    type_ann: None,
+                });
+
+                Ok(js::Stmt::Decl(js::Decl::Var(Box::new(js::VarDecl {
+                    span: DUMMY_SP,
+                    kind: js::VarDeclKind::Const,
+                    declare: false,
+                    decls: vec![js::VarDeclarator {
+                        span: DUMMY_SP,
+                        name: destructure_pattern,
+                        init: Some(Box::new(init_expr)),
+                        definite: false,
+                    }],
+                    ctxt: SyntaxContext::empty(),
+                }))))
+            }
+            _ => Err("Unsupported destructuring pattern".to_string()),
+        }
+    } else {
+        // Variable declaration without initialization
+        if let Pat::Ident(pat_ident) = &*local.pat {
+            let var_name = pat_ident.ident.to_string();
+            let js_var_name = escape_js_identifier(&var_name);
+            let is_mutable = pat_ident.mutability.is_some();
+            
+            state.declare_variable(var_name, js_var_name.clone(), is_mutable);
+            
+            Ok(state.mk_var_decl(&js_var_name, None, false)) // Always use let for uninitialized
+        } else {
+            Err("Unsupported variable pattern".to_string())
+        }
+    }
+}
+
+/// Parse macro tokens into a JavaScript expression
+fn parse_macro_tokens(tokens: &str, state: &mut TranspilerState) -> Result<js::Expr, String> {
+    let trimmed = tokens.trim();
+    
+    // Try to parse as a Rust expression first
+    if let Ok(parsed_expr) = syn::parse_str::<syn::Expr>(trimmed) {
+        rust_expr_to_js(&parsed_expr, state)
+    } else {
+        // Fallback to string literal
+        Ok(state.mk_str_lit(trimmed))
+    }
+}
+
+/// Parse comma-separated expressions from macro tokens
+fn parse_comma_separated_exprs(
+    tokens: &str,
+    state: &mut TranspilerState,
+) -> Result<Vec<js::Expr>, String> {
+    let parts = smart_comma_split(tokens);
+    parts
+        .iter()
+        .map(|part| parse_macro_tokens(part.trim(), state))
+        .collect()
+}
+
+/// Smart comma splitting that respects quote boundaries
 fn smart_comma_split(input: &str) -> Vec<String> {
     let mut parts = Vec::new();
     let mut current_part = String::new();
     let mut in_quotes = false;
+    let mut paren_depth = 0;
     let mut chars = input.chars().peekable();
 
     while let Some(ch) = chars.next() {
         match ch {
             '"' => {
-                // Toggle quote state
                 in_quotes = !in_quotes;
                 current_part.push(ch);
             }
-            ',' if !in_quotes => {
-                // Found a comma outside quotes, split here
+            '(' => {
+                paren_depth += 1;
+                current_part.push(ch);
+            }
+            ')' => {
+                paren_depth -= 1;
+                current_part.push(ch);
+            }
+            ',' if !in_quotes && paren_depth == 0 => {
                 parts.push(current_part.trim().to_string());
                 current_part.clear();
             }
@@ -372,7 +1220,6 @@ fn smart_comma_split(input: &str) -> Vec<String> {
         }
     }
 
-    // Add the last part
     if !current_part.is_empty() {
         parts.push(current_part.trim().to_string());
     }
@@ -380,1435 +1227,51 @@ fn smart_comma_split(input: &str) -> Vec<String> {
     parts
 }
 
-fn update_rust_expr_to_js_for_macros(expr: &Expr) -> Option<String> {
+/// Check if an expression is likely to be a string
+fn is_string_expr(expr: &Expr) -> bool {
     match expr {
-        // Handle tuple expressions
-        Expr::Tuple(tuple_expr) => {
-            let elements: Vec<String> = tuple_expr
-                .elems
-                .iter()
-                .map(|elem| rust_expr_to_js(elem))
-                .collect();
-
-            Some(format!("[{}]", elements.join(", ")))
-        }
-        // Handle cast expressions (type conversion)
-        Expr::Cast(cast_expr) => {
-            let expr_js = rust_expr_to_js(&cast_expr.expr);
-            let target_type = format_rust_type(&cast_expr.ty);
-
-            // Handle different cast types
-            let result = match target_type.as_str() {
-                "number" => {
-                    // Casting to numeric types - use Number() for explicit conversion
-                    format!("Number({})", expr_js)
-                }
-                "string" => {
-                    // Casting to string - use String() or .toString()
-                    format!("String({})", expr_js)
-                }
-                "boolean" => {
-                    // Casting to boolean - use Boolean()
-                    format!("Boolean({})", expr_js)
-                }
-                _ => {
-                    // For other types, just use the expression with a comment
-                    format!(
-                        "{} /* was {} as {} in Rust */",
-                        expr_js, expr_js, target_type
-                    )
-                }
-            };
-            Some(result)
-        }
-        Expr::Macro(mac_expr) => {
-            // Handle macro expressions
-            Some(handle_macro_expr(&mac_expr.mac))
-        }
-        Expr::Binary(bin_expr) => Some(handle_binary_op(bin_expr)),
-        // Handle reference expressions (&expr)
-        Expr::Reference(ref_expr) => {
-            // In JavaScript, references don't exist in the same way as Rust
-            // We'll just return the referenced expression itself
-            let inner_expr = rust_expr_to_js(&ref_expr.expr);
-
-            // Handle different types of references
-            match ref_expr.mutability {
-                Some(_) => {
-                    // Mutable reference (&mut expr)
-                    // In JS, we can't have true mutable references, so just return the value
-                    // Add a comment to indicate it was a mutable reference in Rust
-                    Some(format!("{} /* was &mut in Rust */", inner_expr))
-                }
-                None => {
-                    // Immutable reference (&expr)
-                    // For most cases, just return the inner expression
-                    // However, for certain patterns, we might want to handle differently
-                    match &*ref_expr.expr {
-                        // If it's a reference to a string literal, just return the string
-                        Expr::Lit(lit) => match &lit.lit {
-                            syn::Lit::Str(_) => Some(inner_expr),
-                            _ => Some(format!("{} /* was & in Rust */", inner_expr)),
-                        },
-                        // If it's a reference to a variable, just return the variable
-                        Expr::Path(_) => Some(inner_expr),
-                        // For other expressions, add a comment
-                        _ => Some(format!("{} /* was & in Rust */", inner_expr)),
-                    }
-                }
-            }
-        }
-
-        // x => { eprintln!("EXPR: {:?}", &x); None }, // Not a macro or binary expression
-        _ => None,
-    }
-}
-
-pub fn handle_format_macro(args: &Punctuated<Expr, Comma>) -> String {
-    if args.is_empty() {
-        return "\"\"".to_string();
-    }
-
-    // Get the format string
-    if let Some(first_arg) = args.first() {
-        if let Expr::Lit(lit) = first_arg {
-            if let syn::Lit::Str(str_lit) = &lit.lit {
-                let format_str = str_lit.value();
-
-                // If there are no placeholders, just return the string literal
-                if !format_str.contains("{}") {
-                    return format!("\"{}\"", format_str);
-                }
-
-                // Get the arguments to fill in the placeholders
-                let format_args: Vec<String> = args
-                    .iter()
-                    .skip(1) // Skip the format string
-                    .map(|arg| rust_expr_to_js(arg))
-                    .collect();
-
-                // Split the format string at each placeholder
-                let parts: Vec<&str> = format_str.split("{}").collect();
-
-                // Combine the parts with the arguments using a template literal
-                let mut result = String::from("`");
-
-                for (i, part) in parts.iter().enumerate() {
-                    // Escape backticks in the string parts
-                    let escaped_part = part.replace("`", "\\`");
-                    result.push_str(&escaped_part);
-
-                    // Add the argument if there is one for this placeholder
-                    if i < format_args.len() {
-                        result.push_str(&format!("${{{}}}", format_args[i]));
-                    }
-                }
-
-                result.push('`');
-                return result;
-            }
-        }
-    }
-
-    // Fallback: just concatenate the arguments
-    let args_js: Vec<String> = args.iter().map(|arg| rust_expr_to_js(arg)).collect();
-
-    args_js.join(" + ")
-}
-
-// Handle if-let expressions specifically
-fn handle_if_let(expr: &syn::ExprIf) -> Option<String> {
-    // Check if this is an "if let" expression by examining the condition
-    if let Expr::Let(expr_let) = &*expr.cond {
-        // This is an "if let" expression
-        // Extract the pattern and the expression being matched
-        let pat = &expr_let.pat;
-        let init_expr = &expr_let.expr;
-
-        // Check if this is specifically "if let Some(x) = ..." pattern
-        if let Pat::TupleStruct(tuple_struct) = &**pat {
-            if let Some(last_segment) = tuple_struct.path.segments.last() {
-                if last_segment.ident == "Some" && !tuple_struct.elems.is_empty() {
-                    // This is "if let Some(x) = ..." pattern
-                    if let Some(inner_pat) = tuple_struct.elems.first() {
-                        if let Pat::Ident(ident) = inner_pat {
-                            let var_name = ident.ident.to_string();
-                            let matched_expr = rust_expr_to_js(init_expr);
-                            let then_js = rust_block_to_js(&expr.then_branch);
-
-                            // Convert to JavaScript null/undefined check
-                            let mut js = format!("(function() {{\n");
-                            js.push_str(&format!("  const _temp = {};\n", matched_expr));
-                            js.push_str(&format!(
-                                "  if (_temp !== null && _temp !== undefined) {{\n"
-                            ));
-                            js.push_str(&format!("    const {} = _temp;\n", var_name));
-
-                            // Add the then branch
-                            js.push_str(&indent_lines(&then_js, 4));
-                            js.push_str("  }");
-
-                            // Handle the else branch if it exists
-                            if let Some((_, else_branch)) = &expr.else_branch {
-                                match &**else_branch {
-                                    Expr::Block(else_block) => {
-                                        let else_js = rust_block_to_js(&else_block.block);
-                                        js.push_str(&format!(
-                                            " else {{\n{}",
-                                            indent_lines(&else_js, 4)
-                                        ));
-                                        js.push_str("  }");
-                                    }
-                                    _ => {
-                                        let else_js = rust_expr_to_js(else_branch);
-                                        js.push_str(&format!(
-                                            " else {{\n    return {};\n  }}",
-                                            else_js
-                                        ));
-                                    }
-                                }
-                            }
-
-                            js.push_str("\n  return undefined;\n}).call(this)");
-                            return Some(js);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Not an "if let Some(x) = ..." pattern
-    None
-}
-
-// Handle while loops
-fn handle_while_expr(expr: &syn::ExprWhile) -> String {
-    let cond_js = rust_expr_to_js(&expr.cond);
-    let body_js = rust_block_to_js(&expr.body);
-
-    // Remove starting spaces from each line in body_js
-    let trimmed_body = body_js
-        .lines()
-        .map(|line| {
-            if line.starts_with("  ") {
-                line[2..].to_string()
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<String>>()
-        .join("\n");
-
-    // wrap the body into a function
-    let trimmed_body = format!("(function() {{\n{}}}).call(this);", trimmed_body);
-
-    format!("while ({}) {{\n{}}}", cond_js, trimmed_body)
-}
-
-// Handle for loops
-fn handle_for_expr(expr: &syn::ExprForLoop) -> String {
-    // Check if this is an enumerate pattern: for (i, item) in collection.iter().enumerate()
-    if let (Pat::Tuple(tuple_pat), Some(enumerate_info)) =
-        (&*expr.pat, detect_enumerate_pattern(&expr.expr))
-    {
-        // This is a for (i, item) in collection.iter().enumerate() pattern
-        if tuple_pat.elems.len() == 2 {
-            let index_var = if let Pat::Ident(ref pat_ident) = tuple_pat.elems[0] {
-                pat_ident.ident.to_string()
-            } else {
-                "i".to_string()
-            };
-
-            let item_var = if let Pat::Ident(ref pat_ident) = tuple_pat.elems[1] {
-                pat_ident.ident.to_string()
-            } else {
-                "item".to_string()
-            };
-
-            let iterable_js = enumerate_info.collection;
-            // Process statements directly, not as a block expression
-            let body_js = rust_block_statements_to_js(&expr.body);
-
-            return format!(
-                "let {} = 0;\nfor (const {} of {}) {{\n{}\n  {}++;\n}}",
-                index_var, item_var, iterable_js, body_js, index_var
-            );
-        }
-    }
-
-    // Handle regular iteration patterns
-    let var_name = if let Pat::Ident(pat_ident) = &*expr.pat {
-        pat_ident.ident.to_string()
-    } else {
-        "item".to_string()
-    };
-
-    // Convert the iterable expression, handling .iter() method calls
-    let iterable_js = convert_iterable_expr(&expr.expr);
-    // Process statements directly, not as a block expression
-    let body_js = rust_block_statements_to_js(&expr.body);
-
-    format!(
-        "for (const {} of {}) {{\n{}\n}}",
-        var_name, iterable_js, body_js
-    )
-}
-
-fn unwrap_pattern_types(pat: &Pat) -> &Pat {
-    match pat {
-        Pat::Type(pat_type) => unwrap_pattern_types(&pat_type.pat),
-        _ => pat,
-    }
-}
-
-fn handle_local_statement(local: &syn::Local) -> String {
-    // Handle variable declarations
-    if let Some(init) = &local.init {
-        // We directly access the expr from the init
-        let init_expr = &init.expr;
-
-        // Unwrap any type annotations first
-        let actual_pattern = unwrap_pattern_types(&local.pat);
-
-        match actual_pattern {
-            Pat::Ident(pat_ident) => {
-                let var_name = pat_ident.ident.to_string();
-                let init_js = rust_expr_to_js(init_expr);
-
-                // Check for mutability
-                if pat_ident.mutability.is_some() {
-                    format!("  let {} = {};\n", var_name, init_js)
-                } else {
-                    format!("  const {} = {};\n", var_name, init_js)
-                }
-            }
-            // Handle destructuring patterns
-            Pat::Tuple(tuple_pat) => {
-                let vars: Vec<String> = tuple_pat
-                    .elems
-                    .iter()
-                    .filter_map(|pat| {
-                        let unwrapped = unwrap_pattern_types(pat);
-                        if let Pat::Ident(pat_ident) = unwrapped {
-                            Some(pat_ident.ident.to_string())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-
-                let init_js = rust_expr_to_js(init_expr);
-                format!("  const [{}] = {};\n", vars.join(", "), init_js)
-            }
-            Pat::Struct(struct_pat) => {
-                let fields: Vec<String> = struct_pat
-                    .fields
-                    .iter()
-                    .filter_map(|field| {
-                        let unwrapped = unwrap_pattern_types(&field.pat);
-                        if let Pat::Ident(pat_ident) = unwrapped {
-                            Some(pat_ident.ident.to_string())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-
-                let init_js = rust_expr_to_js(init_expr);
-                format!("  const {{ {} }} = {};\n", fields.join(", "), init_js)
-            }
-            x => panic!("  /* Unsupported destructuring pattern: {:?}  */\n", x),
-        }
-    } else {
-        // Variable declaration without initialization
-        let actual_pattern = unwrap_pattern_types(&local.pat);
-        match actual_pattern {
-            Pat::Ident(pat_ident) => {
-                let var_name = pat_ident.ident.to_string();
-
-                // Check for mutability
-                if pat_ident.mutability.is_some() {
-                    format!("  let {};\n", var_name)
-                } else {
-                    format!("  let {};\n", var_name)
-                }
-            }
-            x => panic!("  /* Unsupported variable pattern: {:?}  */\n", x),
-        }
-    }
-}
-
-// Add this helper function to process block statements without IIFE wrapping
-fn rust_block_statements_to_js(block: &syn::Block) -> String {
-    let mut js_code = String::new();
-
-    for stmt in &block.stmts {
-        let stmt_js = match stmt {
-            Stmt::Local(local) => {
-                let var_name = if let Pat::Ident(ref pat_ident) = local.pat {
-                    pat_ident.ident.to_string()
-                } else {
-                    "unknown".to_string()
-                };
-
-                match &local.init {
-                    Some(init) => {
-                        let init_js = rust_expr_to_js(&init.expr);
-                        format!("  let {} = {};", var_name, init_js)
-                    }
-                    None => {
-                        format!("  let {};", var_name)
-                    }
-                }
-            }
-            Stmt::Expr(expr, Some(_)) => {
-                let js_expr = rust_expr_to_js(expr);
-                format!("  {};", js_expr)
-            }
-            Stmt::Expr(expr, None) => {
-                let js_expr = rust_expr_to_js(expr);
-                format!("  {};", js_expr)
-            }
-            Stmt::Macro(mac_stmt) => {
-                let macro_result = handle_macro_expr(&mac_stmt.mac);
-                // Add proper indentation and semicolon for macro statements
-                format!("  {};\n", macro_result)
-            }
-            Stmt::Item(x) => panic!("  /* item statement: {:?} */", &x),
-            x => panic!("  /* unknown statement: {:?} */", x),
-        };
-
-        if !stmt_js.trim().is_empty() {
-            js_code.push_str(&stmt_js);
-            if !stmt_js.ends_with('\n') {
-                js_code.push('\n');
-            }
-        }
-    }
-
-    js_code.trim_end().to_string()
-}
-
-// Helper function to detect enumerate patterns
-struct EnumerateInfo {
-    collection: String,
-}
-
-fn detect_enumerate_pattern(expr: &Expr) -> Option<EnumerateInfo> {
-    if let Expr::MethodCall(method_call) = expr {
-        if method_call.method == "enumerate" {
-            // Check if the receiver is a .iter() call
-            if let Expr::MethodCall(iter_call) = &*method_call.receiver {
-                if iter_call.method == "iter" {
-                    let collection = rust_expr_to_js(&iter_call.receiver);
-                    return Some(EnumerateInfo { collection });
-                }
-            }
-        }
-    }
-    None
-}
-
-// Helper function to convert iterable expressions
-fn convert_iterable_expr(expr: &Expr) -> String {
-    match expr {
-        Expr::MethodCall(method_call) => {
-            let receiver = rust_expr_to_js(&method_call.receiver);
-            let method_name = method_call.method.to_string();
-
-            match method_name.as_str() {
-                "iter" => {
-                    // .iter() in JavaScript is just the array itself
-                    receiver
-                }
-                "enumerate" => {
-                    format!("{}.map((item, index) => [index, item])", receiver)
-                    // format!( "let {} = 0;\nfor (const {} of {}) {{\n{}\n  {}++;\n}}", index_var, item_var, iterable_js, trimmed_body, index_var)
-                }
-                _ => {
-                    // Other method calls, convert normally
-                    rust_expr_to_js(expr)
-                }
-            }
-        }
-        _ => rust_expr_to_js(expr),
-    }
-}
-
-// Update rust_block_to_js to handle loops
-pub fn rust_block_to_js(block: &Block) -> String {
-    let mut js_code = String::new();
-
-    for stmt in &block.stmts {
-        let stmt_js = match stmt {
-            Stmt::Expr(expr, semi) => {
-                match expr {
-                    Expr::While(while_expr) => {
-                        // Handle while loops - don't add semicolon or extra formatting
-                        let expr_js = handle_while_expr(while_expr);
-                        format!("  {};\n", expr_js) // Add proper indentation
-                    }
-                    Expr::ForLoop(for_expr) => {
-                        // Handle for loops - don't add semicolon or extra formatting
-                        let expr_js = handle_for_expr(for_expr);
-                        format!("  {};\n", expr_js) // Add proper indentation
-                    }
-                    _ => {
-                        // Regular expression handling
-                        let js_expr = rust_expr_to_js(expr);
-
-                        // Add semicolon if it exists in Rust
-                        if semi.is_some() {
-                            format!("  {};\n", js_expr)
-                        } else {
-                            // For return expressions
-                            format!("  return {};\n", js_expr)
-                        }
-                    }
-                }
-            }
-            Stmt::Local(local) => handle_local_statement(local),
-            Stmt::Macro(mac_stmt) => {
-                let macro_result = handle_macro_expr(&mac_stmt.mac);
-                // Add proper indentation and semicolon for macro statements
-                format!("  {};\n", macro_result)
-            }
-            // Remove unsupported Stmt variants
-            x => panic!("Unsupported statement {:?}", &x), //"  /* Unsupported statement */\n".to_string(),
-        };
-
-        js_code.push_str(&stmt_js);
-    }
-
-    js_code
-}
-
-fn get_closure_param_name(param: &syn::Pat) -> Option<String> {
-    eprintln!("PARAM: {:?}", &param);
-    match param {
-        syn::Pat::Ident(pat_ident) => Some(pat_ident.ident.to_string()),
-        syn::Pat::Reference(pat_ref) => get_closure_param_name(&pat_ref.pat),
-        _ => None,
-    }
-}
-
-fn guess_conversion_method(method_name: &str, receiver: &Expr) -> Option<String> {
-    match method_name {
-        "into" => {
-            match receiver {
-                Expr::Lit(lit) => match &lit.lit {
-                    syn::Lit::Str(_) => Some("Number".to_string()), // String to number
-                    syn::Lit::Int(_) | syn::Lit::Float(_) => Some("String".to_string()), // Number to string
-                    _ => Some("String".to_string()), // Default to string
-                },
-                _ => Some("Number".to_string()), // Default guess: convert to number
-            }
-        }
-        "parse" => Some("parseFloat".to_string()),
-        "clone" => Some("".to_string()), // Just remove .clone()
-        _ => None,
-    }
-}
-
-// The main function for converting Rust expressions to JavaScript
-pub fn rust_expr_to_js(expr: &Expr) -> String {
-    if let Some(result) = update_rust_expr_to_js_for_macros(expr) {
-        return result;
-    }
-
-    match expr {
-        // Handle array repeat expressions [value; count]
-        Expr::Repeat(repeat_expr) => {
-            let value_js = rust_expr_to_js(&repeat_expr.expr);
-            let count_js = rust_expr_to_js(&repeat_expr.len);
-
-            // Generate JavaScript array filled with the repeated value
-            format!("Array.from({{length: {}}}, () => {})", count_js, value_js)
-        }
-
-        // Handle loop expressions (infinite loops)
-        Expr::Loop(loop_expr) => {
-            let body_js = rust_block_to_js(&loop_expr.body);
-
-            // Convert to while(true) loop in JavaScript
-            // Note: break with values is complex, for now just handle basic loops
-            format!("while (true) {{\n{}}}", body_js)
-        }
-
-        // Handle break expressions
-        Expr::Break(break_expr) => {
-            if let Some(value) = &break_expr.expr {
-                let value_js = rust_expr_to_js(value);
-                // For now, just return the value (full break-with-value needs more complex handling)
-                format!("return {}; /* was break {} in Rust */", value_js, value_js)
-            } else {
-                "break;".to_string()
-            }
-        }
-
-        // Handle continue expressions
-        Expr::Continue(_) => "continue;".to_string(),
-
-        // Handle verbatim expressions (edge case)
-        Expr::Verbatim(x) => {
-            format!("/* Empty or verbatim expression: {:?} */", x)
-        }
-
-        Expr::Closure(closure) => {
-            // Extract parameter names
-            let params: Vec<String> = closure
-                .inputs
-                .iter()
-                .filter_map(|param| get_closure_param_name(&param))
-                .collect();
-            eprintln!("CLOSURE DEBUG {:?} params: {:?}", &closure, &params);
-            // Handle closure body specially
-            let body_js = match &*closure.body {
-                // If the closure body is a block, handle it directly without IIFE wrapping
-                Expr::Block(block_expr) => {
-                    let block_content = rust_block_to_js(&block_expr.block);
-                    // Remove the outer braces and IIFE wrapping for closure context
-                    let trimmed = block_content.trim();
-                    if trimmed.starts_with("(function()") && trimmed.ends_with("})()") {
-                        // Extract the inner content
-                        let inner = &trimmed[12..trimmed.len() - 4]; // Remove "(function() {" and "})()"
-                        format!("{{{}}}", inner)
-                    } else {
-                        format!("{{{}}}", block_content)
-                    }
-                }
-                // For single expressions, convert normally
-                _ => {
-                    let expr_js = rust_expr_to_js(&closure.body);
-                    // If it's a simple expression, don't wrap in braces
-                    if expr_js.contains("return ") || expr_js.contains("(function()") {
-                        format!("{{{}}}", expr_js)
-                    } else {
-                        expr_js
-                    }
-                }
-            };
-
-            if params.len() == 1 {
-                format!("{} => {}", params[0], body_js)
-            } else {
-                format!("({}) => {}", params.join(", "), body_js)
-            }
-        }
-
-        // Handle async blocks
-        Expr::Async(async_expr) => {
-            // Convert the async block to a regular async function
-            let block_js = rust_block_to_js(&async_expr.block);
-            format!("(async function() {{\n{}}})();", block_js)
-        }
-
-        // Handle await expressions
-        Expr::Await(await_expr) => {
-            let base_js = rust_expr_to_js(&await_expr.base);
-            format!("await {}", base_js)
-        }
-
-        // Handle range expressions
-        Expr::Range(range_expr) => {
-            match (&range_expr.start, &range_expr.end) {
-                (Some(start), Some(end)) => {
-                    let start_js = rust_expr_to_js(start);
-                    let end_js = rust_expr_to_js(end);
-
-                    // Check if it's inclusive (..=) or exclusive (..)
-                    match range_expr.limits {
-                        syn::RangeLimits::HalfOpen(_) => {
-                            // Exclusive range (1..10) -> Array.from({length: 10-1}, (_, i) => i + 1)
-                            format!(
-                                "Array.from({{length: {} - {}}}, (_, i) => i + {})",
-                                end_js, start_js, start_js
-                            )
-                        }
-                        syn::RangeLimits::Closed(_) => {
-                            // Inclusive range (1..=10) -> Array.from({length: 10-1+1}, (_, i) => i + 1)
-                            format!(
-                                "Array.from({{length: {} - {} + 1}}, (_, i) => i + {})",
-                                end_js, start_js, start_js
-                            )
-                        }
-                    }
-                }
-                (Some(start), None) => {
-                    // Range from start (1..) - not easily representable in JS
-                    let start_js = rust_expr_to_js(start);
-                    format!("/* Range from {} (infinite) */", start_js)
-                }
-                (None, Some(end)) => {
-                    // Range to end (..10) -> Array.from({length: 10}, (_, i) => i)
-                    let end_js = rust_expr_to_js(end);
-                    format!("Array.from({{length: {}}}, (_, i) => i)", end_js)
-                }
-                (None, None) => {
-                    // Full range (..) - infinite range
-                    "/* Full range (..) - infinite */".to_string()
-                }
-            }
-        }
-
-        // Handle try expressions (? operator)
-        Expr::Try(try_expr) => {
-            let base_js = rust_expr_to_js(&try_expr.expr);
-            // In JavaScript, we can simulate the ? operator with optional chaining or try/catch
-            // For now, just add a comment indicating it was a try operation
-            format!("{} /* was {}? in Rust */", base_js, base_js)
-        }
-
-        // Handle let expressions (if let, while let, etc.)
-        Expr::Let(let_expr) => {
-            // This is complex - for now, generate a comment
-            let expr_js = rust_expr_to_js(&let_expr.expr);
-            format!("/* let pattern = {} */", expr_js)
-        }
-
-        // Handle macro expressions that aren't covered by update_rust_expr_to_js_for_macros
-        Expr::Macro(macro_expr) => handle_macro_expr(&macro_expr.mac),
-
-        // Handle while loops
-        Expr::While(while_expr) => handle_while_expr(while_expr),
-
-        // Handle for loops
-        Expr::ForLoop(for_expr) => handle_for_expr(for_expr),
-
-        Expr::Block(block_expr) => {
-            // Handle nested blocks
-            let block_js = rust_block_to_js(&block_expr.block);
-            format!("(function() {{\n{}}}).call(this);", block_js)
-        }
-
-        // Handle if-let expressions
-        Expr::If(if_expr) => {
-            // First check if this is an "if let Some(x) = ..." pattern
-            if let Some(if_let_js) = handle_if_let(if_expr) {
-                return if_let_js;
-            }
-
-            // Regular if expression
-            let cond_js = rust_expr_to_js(&if_expr.cond);
-            let then_js = rust_block_to_js(&if_expr.then_branch);
-            let mut if_js = format!(
-                "(function() {{\n  if ({}) {{\n{}",
-                cond_js,
-                indent_lines(&then_js, 4)
-            );
-
-            if_js.push_str("  }");
-
-            // Handle else branch
-            if let Some((_, else_branch)) = &if_expr.else_branch {
-                match &**else_branch {
-                    Expr::Block(else_block) => {
-                        let else_js = rust_block_to_js(&else_block.block);
-                        if_js.push_str(&format!(" else {{\n{}", indent_lines(&else_js, 4)));
-                        if_js.push_str("  }");
-                    }
-                    Expr::If(_) => {
-                        // Handle else if
-                        let else_if_js = rust_expr_to_js(else_branch);
-                        if_js.push_str(&format!(" else {}", else_if_js));
-                    }
-                    _ => {
-                        let else_js = rust_expr_to_js(else_branch);
-                        if_js.push_str(&format!(" else {{\n    return {};\n  }}", else_js));
-                    }
-                }
-            }
-
-            if_js.push_str("\n  return undefined;\n}).call(this)");
-            if_js
-        }
-
-        // Handle function calls and format! macro
+        Expr::Lit(lit) => matches!(lit.lit, syn::Lit::Str(_)),
         Expr::Call(call) => {
             if let Expr::Path(path) = &*call.func {
-                if path.path.segments.len() == 2 {
-                    let type_name = path.path.segments[0].ident.to_string();
-                    let method_name = path.path.segments[1].ident.to_string();
-
-                    if method_name == "new" {
-                        // List of types that should use JavaScript "new" constructor
-                        let js_constructor_types = [
-                            "XMLHttpRequest",
-                            "XMLHttpRequestUpload",
-                            "ProgressEvent",
-                            "Element",
-                            "Document",
-                            "Window",
-                            "Console",
-                            "Arc",
-                            "Mutex",
-                        ];
-                        let skip_js_constructor_types = ["Arc"];
-                        if skip_js_constructor_types.contains(&type_name.as_str()) {
-                            // This constructor should be removed from the call tree
-                            let args: Vec<String> =
-                                call.args.iter().map(|arg| rust_expr_to_js(arg)).collect();
-                            return format!("{}", args.join(", "));
-                        }
-
-                        if js_constructor_types.contains(&type_name.as_str()) {
-                            let args: Vec<String> =
-                                call.args.iter().map(|arg| rust_expr_to_js(arg)).collect();
-                            return format!("new {}({})", type_name, args.join(", "));
-                        }
-                    }
-                }
-            }
-            // Get the function name
-            let func_name = match &*call.func {
-                Expr::Path(path) => {
-                    if let Some(last_segment) = path.path.segments.last() {
-                        let name = last_segment.ident.to_string();
-                        match name.as_str() {
-                            "println" | "print" => "console.log".to_string(),
-                            "eprintln" | "eprint" => "console.error".to_string(),
-                            "format" => "".to_string(), // format! becomes string template in JS
-                            "Some" => "".to_string(),   // Option::Some becomes just the value in JS
-                            _ => format!("{}", name),
-                        }
-                    } else {
-                        panic!("/* Unsupported function path */");
-                    }
-                }
-                Expr::MethodCall(method_call) => {
-                    // Special check for self method calls
-                    let js_receiver = if let Expr::Path(path) = &*method_call.receiver {
-                        if let Some(last_segment) = path.path.segments.last() {
-                            if last_segment.ident == "self" {
-                                "this".to_string()
-                            } else {
-                                rust_expr_to_js(&method_call.receiver)
-                            }
-                        } else {
-                            rust_expr_to_js(&method_call.receiver)
-                        }
-                    } else {
-                        rust_expr_to_js(&method_call.receiver)
-                    };
-
-                    let method_name = method_call.method.to_string();
-
-                    // Check if this is a constructor call (Type::new())
-                    if method_name == "new" {
-                        // Check if the receiver is a type name that should use "new" in JS
-                        if let Expr::Path(path) = &*method_call.receiver {
-                            if let Some(last_segment) = path.path.segments.last() {
-                                let type_name = last_segment.ident.to_string();
-
-                                // List of types that should use JavaScript "new" constructor
-                                let js_constructor_types = [
-                                    "XMLHttpRequest",
-                                    "XMLHttpRequestUpload",
-                                    "ProgressEvent",
-                                    "Element",
-                                    "Document",
-                                    "Window",
-                                    "Console",
-                                    "Date",
-                                    "Array",
-                                    "Object",
-                                    "Map",
-                                    "Set",
-                                    "RegExp",
-                                    "Error",
-                                    "Promise",
-                                ];
-
-                                if js_constructor_types.contains(&type_name.as_str()) {
-                                    // Convert arguments
-                                    let args: Vec<String> = method_call
-                                        .args
-                                        .iter()
-                                        .map(|arg| rust_expr_to_js(arg))
-                                        .collect();
-                                    return format!("new {}({})", type_name, args.join(", "));
-                                }
-                            }
-                        }
-                    }
-
-                    // Map Rust methods to JavaScript methods
-                    let js_method = match method_name.as_str() {
-                        "len" => {
-                            // Special case: .len() becomes .length (property, not method)
-                            return format!("{}.length", js_receiver);
-                        }
-                        "count" => {
-                            // Special case: .count() becomes .length (property, not method)
-                            return format!("{}.length", js_receiver);
-                        }
-                        "clone" => {
-                            // Special case, use shallow copy
-                            return format!("{}", js_receiver);
-                        }
-                        "push" => "push",
-                        "pop" => "pop",
-                        "remove" => "splice",
-                        "insert" => "splice",
-                        "iter" => "",    // In JS, we don't need .iter() for iteration
-                        "collect" => "", // In JS, we don't need .collect()
-                        "map" => "map",
-                        "filter" => "filter",
-                        "find" => "find",
-                        "contains" => "includes",
-                        "to_string" => "toString",
-                        "to_uppercase" => "toUpperCase",
-                        "to_lowercase" => "toLowerCase",
-                        "trim" => "trim",
-                        "trim_start" => "trimStart",
-                        "trim_end" => "trimEnd",
-                        "starts_with" => "startsWith",
-                        "ends_with" => "endsWith",
-                        "replace" => "replace",
-                        "split" => "split",
-                        "join" => "join",
-                        "is_some" => "", // Handle Option methods specially
-                        "is_none" => "",
-                        "unwrap" => "",
-                        _ => &method_name,
-                    };
-
-                    // Convert arguments
-                    let args: Vec<String> = method_call
-                        .args
-                        .iter()
-                        .map(|arg| rust_expr_to_js(arg))
-                        .collect();
-
-                    // Handle empty JS method (e.g., .iter(), .collect())
-                    if js_method.is_empty() {
-                        match method_name.as_str() {
-                            "is_some" => format!(
-                                "({} !== null && {} !== undefined)",
-                                js_receiver, js_receiver
-                            ),
-                            "is_none" => format!(
-                                "({} === null || {} === undefined)",
-                                js_receiver, js_receiver
-                            ),
-                            "unwrap" => js_receiver, // Just use the value itself
-                            _ => js_receiver,
-                        }
-                    } else {
-                        format!("{}.{}({})", js_receiver, js_method, args.join(", "))
-                    }
-                }
-                _ => rust_expr_to_js(&call.func),
-            };
-
-            // Handle special cases
-            if func_name.is_empty() {
-                if path_ends_with(&call.func, "format") {
-                    // Use our improved format handling
-                    return handle_format_macro(&call.args);
-                } else if path_ends_with(&call.func, "Some") {
-                    // For Option::Some, just return the value in JS
-                    if call.args.len() == 1 {
-                        return rust_expr_to_js(&call.args[0]);
-                    } else {
-                        return format!("/* Invalid Some with {} args */", call.args.len());
-                    }
-                }
-            }
-
-            // Convert arguments
-            let args: Vec<String> = call.args.iter().map(|arg| rust_expr_to_js(arg)).collect();
-
-            // Regular function call
-            format!("{}({})", func_name, args.join(", "))
-        }
-
-        Expr::MethodCall(method_call) => {
-            let method_name = method_call.method.to_string();
-
-            // Check if this is a conversion method we can handle
-            if let Some(conversion) = guess_conversion_method(&method_name, &method_call.receiver) {
-                let receiver_js = rust_expr_to_js(&method_call.receiver);
-
-                if conversion.is_empty() {
-                    // Empty conversion means just remove the method (like .clone())
-                    return receiver_js;
+                if let Some(segment) = path.path.segments.last() {
+                    matches!(segment.ident.to_string().as_str(), "format" | "to_string")
                 } else {
-                    // Apply the conversion
-                    return format!("{}({})", conversion, receiver_js);
+                    false
                 }
-            }
-
-            // Handle method calls (existing logic - keep unchanged)
-            let receiver = rust_expr_to_js(&method_call.receiver);
-
-            // Map Rust methods to JavaScript methods
-            let js_method = match method_name.as_str() {
-                "len" => {
-                    // Special case: .len() becomes .length (property, not method)
-                    return format!("{}.length", receiver);
-                }
-                "count" => {
-                    // Special case: .count() becomes .length (property, not method)
-                    return format!("{}.length", receiver);
-                }
-                "clone" => {
-                    // Special case, use shallow copy
-                    // return format!("Object.assign({{}}, {})", receiver);
-                    return format!("{}", receiver);
-                }
-                "push" => "push",
-                "pop" => "pop",
-                "remove" => "splice",
-                "insert" => "splice",
-                "iter" => "",    // In JS, we don't need .iter() for iteration
-                "collect" => "", // In JS, we don't need .collect()
-                "map" => "map",
-                "filter" => "filter",
-                "find" => "find",
-                "contains" => "includes",
-                "to_string" => "toString",
-                "to_uppercase" => "toUpperCase",
-                "to_lowercase" => "toLowerCase",
-                "trim" => "trim",
-                "trim_start" => "trimStart",
-                "trim_end" => "trimEnd",
-                "starts_with" => "startsWith",
-                "ends_with" => "endsWith",
-                "replace" => "replace",
-                "split" => "split",
-                "join" => "join",
-                "is_some" => "", // Handle Option methods specially
-                "is_none" => "",
-                "unwrap" => "",
-                _ => &method_name,
-            };
-
-            // Convert arguments
-            let args: Vec<String> = method_call
-                .args
-                .iter()
-                .map(|arg| rust_expr_to_js(arg))
-                .collect();
-
-            // Handle empty JS method (e.g., .iter(), .collect())
-            if js_method.is_empty() {
-                match method_name.as_str() {
-                    "is_some" => format!("({} !== null && {} !== undefined)", receiver, receiver),
-                    "is_none" => format!("({} === null || {} === undefined)", receiver, receiver),
-                    "unwrap" => receiver, // Just use the value itself
-                    _ => receiver,
-                }
-            } else {
-                format!("{}.{}({})", receiver, js_method, args.join(", "))
-            }
-        }
-        // Handle literals
-        Expr::Lit(lit) => match &lit.lit {
-            syn::Lit::Str(s) => format!(
-                "\"{}\"",
-                // s.value().replace("\"", "\\\"").replace("\n", "\\n")
-                s.value()
-                    .replace("\\", "\\\\") // Escape backslashes first!
-                    .replace("\"", "\\\"") // Escape quotes
-                    .replace("\n", "\\n") // Escape newlines
-                    .replace("\t", "\\t") // Escape tabs
-                    .replace("\r", "\\r") // Escape carriage returns
-            ),
-            syn::Lit::Int(i) => i.to_string(),
-            syn::Lit::Float(f) => f.to_string(),
-            syn::Lit::Bool(b) => b.value.to_string(),
-            syn::Lit::Char(c) => format!("\"{}\"", c.value()),
-            x => panic!("/* Unsupported literal: {:?} */", x),
-        },
-        Expr::Unary(unary) => {
-            let operand = rust_expr_to_js(&unary.expr);
-            match &unary.op {
-                syn::UnOp::Not(_) => format!("!{}", operand),
-                syn::UnOp::Neg(_) => format!("-{}", operand),
-                syn::UnOp::Deref(_) => operand, // In JS, we don't have explicit dereferencing
-                &_ => todo!(),
-            }
-        }
-
-        // Handle binary operations
-        Expr::Binary(bin) => {
-            let left = rust_expr_to_js(&bin.left);
-            let right = rust_expr_to_js(&bin.right);
-
-            match &bin.op {
-                syn::BinOp::Add(_) => {
-                    // Special case for string concatenation
-                    if is_string_expr(&bin.left) || is_string_expr(&bin.right) {
-                        format!("`${{{}}}${{{}}}`", left, right)
-                    } else {
-                        format!("{} + {}", left, right)
-                    }
-                }
-                syn::BinOp::Sub(_) => format!("{} - {}", left, right),
-                syn::BinOp::Mul(_) => format!("{} * {}", left, right),
-                syn::BinOp::Div(_) => format!("{} / {}", left, right),
-                syn::BinOp::Rem(_) => format!("{} % {}", left, right),
-                syn::BinOp::And(_) => format!("{} && {}", left, right),
-                syn::BinOp::Or(_) => format!("{} || {}", left, right),
-                syn::BinOp::BitXor(_) => format!("{} ^ {}", left, right),
-                syn::BinOp::BitAnd(_) => format!("{} & {}", left, right),
-                syn::BinOp::BitOr(_) => format!("{} | {}", left, right),
-                syn::BinOp::Shl(_) => format!("{} << {}", left, right),
-                syn::BinOp::Shr(_) => format!("{} >> {}", left, right),
-                syn::BinOp::Eq(_) => format!("{} === {}", left, right),
-                syn::BinOp::Lt(_) => format!("{} < {}", left, right),
-                syn::BinOp::Le(_) => format!("{} <= {}", left, right),
-                syn::BinOp::Ne(_) => format!("{} !== {}", left, right),
-                syn::BinOp::Ge(_) => format!("{} >= {}", left, right),
-                syn::BinOp::Gt(_) => format!("{} > {}", left, right),
-                x => panic!("/* Unsupported binary op {:?} */ ({}, {})", x, left, right),
-            }
-        }
-
-        // Handle paths (variables, constant references)
-        Expr::Path(path) => {
-            if let Some(last_segment) = path.path.segments.last() {
-                let ident_str = last_segment.ident.to_string();
-
-                // Special case for self -> this conversion
-                if ident_str == "self" {
-                    return "this".to_string();
-                }
-
-                // Special case for common Rust constants
-                match last_segment.ident.to_string().as_str() {
-                    "None" => "null".to_string(),
-                    "Some" => "".to_string(), // We'll handle this in the Index or Call expression
-                    "true" | "false" => last_segment.ident.to_string(),
-                    // Map Status enum variants to their JavaScript equivalents
-                    "Active" => "Status.Active".to_string(),
-                    "Inactive" => "Status.Inactive".to_string(),
-                    "Pending" => "Status.Pending".to_string(),
-                    "Custom" => "Status.Custom".to_string(),
-                    _ => escape_js_identifier(&ident_str), // Use escaped version
-                }
-            } else {
-                panic!("/* Unsupported path */");
-            }
-        }
-
-        // Handle parenthesized expressions
-        Expr::Paren(paren) => {
-            format!("({})", rust_expr_to_js(&paren.expr))
-        }
-
-        // Handle match expressions with Option better
-        Expr::Match(match_expr) => {
-            // First check if this is a match on an Option
-            eprintln!("DEBUG: Checking match arms:");
-            for (i, arm) in match_expr.arms.iter().enumerate() {
-                eprintln!("  Arm {}: {:?}", i, arm.pat);
-                eprintln!("    is_some: {}", is_some_pattern(&arm.pat));
-                eprintln!("    is_none: {}", is_none_pattern(&arm.pat));
-            }
-            let is_option_match = is_option_match_expr(match_expr);
-            eprintln!("DEBUG: is_option_match result: {}", is_option_match);
-
-            if is_option_match {
-                // Handle Option match more intelligently
-                let match_value = rust_expr_to_js(&match_expr.expr);
-
-                // For Option matches, convert to if/else with null check
-                let mut match_js =
-                    format!("(function() {{\n  const _match_value = {};\n", match_value);
-
-                let mut some_arm_js = String::new();
-                let mut none_arm_js = String::new();
-
-                for arm in &match_expr.arms {
-                    if is_some_pattern(&arm.pat) {
-                        // Extract variable name from Some(var) pattern
-                        let var_name = extract_some_var_name(&arm.pat);
-                        let body_js = rust_expr_to_js(&arm.body);
-
-                        if let Some(name) = var_name {
-                            some_arm_js = format!(
-                                "  if (_match_value !== null && _match_value !== undefined) {{\n    const {} = _match_value;\n    return {};\n  }}\n",
-                                name, body_js
-                            );
-                        } else {
-                            some_arm_js = format!(
-                                "  if (_match_value !== null && _match_value !== undefined) {{\n    return {};\n  }}\n",
-                                body_js
-                            );
-                        }
-                    } else if is_none_pattern(&arm.pat) {
-                        let body_js = rust_expr_to_js(&arm.body);
-                        none_arm_js = format!("  else {{\n    return {};\n  }}\n", body_js);
-                    }
-                }
-
-                match_js.push_str(&some_arm_js);
-                match_js.push_str(&none_arm_js);
-
-                if none_arm_js.is_empty() {
-                    match_js.push_str("  return undefined;\n");
-                }
-
-                match_js.push_str("})()");
-                match_js
-            } else {
-                // Original match handling for non-Option matches
-                let match_value = rust_expr_to_js(&match_expr.expr);
-
-                // Use an IIFE to create a block scope
-                let mut match_js =
-                    format!("(function() {{\n  const _match_value = {};\n", match_value);
-
-                // Convert each match arm to an if statement
-                for (i, arm) in match_expr.arms.iter().enumerate() {
-                    // The arm.pat is now a Pat directly, not a reference
-                    let arm_js = match &arm.pat {
-                        Pat::Lit(lit_pat) => {
-                            // For Lit pattern, we need to create an ExprLit manually
-                            let lit_js;
-                            match &lit_pat.lit {
-                                syn::Lit::Str(s) => lit_js = format!("\"{}\"", s.value()),
-                                syn::Lit::Int(i) => lit_js = i.to_string(),
-                                syn::Lit::Float(f) => lit_js = f.to_string(),
-                                syn::Lit::Bool(b) => lit_js = b.value.to_string(),
-                                syn::Lit::Char(c) => lit_js = format!("\"{}\"", c.value()),
-                                // _ => lit_js = "/* Unsupported literal */".to_string(),
-                                x => panic!("Unsupported literal {:?}", x),
-                            }
-
-                            if i == 0 {
-                                format!("  if (_match_value === {}) {{\n", lit_js)
-                            } else {
-                                format!("  else if (_match_value === {}) {{\n", lit_js)
-                            }
-                        }
-                        Pat::Wild(_) => {
-                            // Wildcard pattern (_)
-                            if i == 0 {
-                                "  { // Default case\n".to_string()
-                            } else {
-                                "  else { // Default case\n".to_string()
-                            }
-                        }
-                        Pat::Ident(pat_ident) => {
-                            // Variable binding pattern
-                            let var_name = pat_ident.ident.to_string();
-                            if i == 0 {
-                                format!(
-                                    "  {{ // Binding to {}\n    const {} = _match_value;\n",
-                                    var_name, var_name
-                                )
-                            } else {
-                                format!(
-                                    "  else {{ // Binding to {}\n    const {} = _match_value;\n",
-                                    var_name, var_name
-                                )
-                            }
-                        }
-                        x => {
-                            // Other patterns not supported fully
-                            panic!("Unsupported other pattern (i = {}): {:?}", i, x);
-                            if i == 0 {
-                                "  if (true) { // Unsupported pattern\n".to_string()
-                            } else {
-                                "  else if (true) { // Unsupported pattern\n".to_string()
-                            }
-                        }
-                    };
-
-                    match_js.push_str(&arm_js);
-
-                    // Convert the arm body
-                    let body_js = rust_expr_to_js(&arm.body);
-                    match_js.push_str(&format!("    return {};\n  }}\n", body_js));
-                }
-
-                match_js.push_str("  return undefined;\n})()");
-                match_js
-            }
-        }
-
-        // Handle array literals
-        Expr::Array(array) => {
-            let elements: Vec<String> = array
-                .elems
-                .iter()
-                .map(|elem| rust_expr_to_js(elem))
-                .collect();
-
-            format!("[{}]", elements.join(", "))
-        }
-
-        // Handle array indexing
-        Expr::Index(index) => {
-            let array_js = rust_expr_to_js(&index.expr);
-            let index_js = rust_expr_to_js(&index.index);
-
-            format!("{}[{}]", array_js, index_js)
-        }
-
-        // Handle assignments
-        Expr::Assign(assign) => {
-            let left = rust_expr_to_js(&assign.left);
-            let right = rust_expr_to_js(&assign.right);
-
-            format!("{} = {}", left, right)
-        }
-
-        // Handle return statements
-        Expr::Return(ret) => {
-            if let Some(expr) = &ret.expr {
-                format!("return {}", rust_expr_to_js(expr))
-            } else {
-                "return".to_string()
-            }
-        }
-
-        // Handle field access
-        Expr::Field(field) => {
-            // Special check for self.field pattern
-            if let Expr::Path(path) = &*field.base {
-                if let Some(last_segment) = path.path.segments.last() {
-                    if last_segment.ident == "self" {
-                        let member = match &field.member {
-                            syn::Member::Named(ident) => ident.to_string(),
-                            syn::Member::Unnamed(index) => index.index.to_string(),
-                        };
-                        return format!("this.{}", member);
-                    }
-                }
-            }
-
-            // Regular field access handling
-            let base = rust_expr_to_js(&field.base);
-            let member = match &field.member {
-                syn::Member::Named(ident) => ident.to_string(),
-                syn::Member::Unnamed(index) => index.index.to_string(),
-            };
-
-            format!("{}.{}", base, member)
-        }
-
-        // Handle struct instantiation as JS object
-        Expr::Struct(struct_expr) => {
-            let mut fields = Vec::new();
-            let path = &struct_expr.path;
-            let struct_name = if let Some(ident) = path.get_ident() {
-                ident.to_string()
-            } else {
-                // Handle complex paths like module::StructName
-                path.segments.last().unwrap().ident.to_string()
-            };
-
-            for field in &struct_expr.fields {
-                let field_name = match &field.member {
-                    syn::Member::Named(ident) => ident.to_string(),
-                    syn::Member::Unnamed(index) => format!("_{}", index.index),
-                };
-                let field_value = rust_expr_to_js(&field.expr);
-                // fields.push(format!("{}: {}", field_name, field_value));
-                fields.push(format!("{}", field_value));
-            }
-
-            //  WAS:
-            //  format!("{{ {} }}", fields.join(", "))
-            format!("new {}({})", struct_name, fields.join(", "))
-        }
-
-        // For any other unhandled expression
-        x => panic!("/* Unsupported expression: {:?} */", x).to_string(),
-    }
-}
-
-// Functions to check if an expression is a Some/None pattern
-fn is_some_pattern(pat: &Pat) -> bool {
-    match pat {
-        Pat::TupleStruct(tuple_struct) => {
-            if let Some(last_segment) = tuple_struct.path.segments.last() {
-                last_segment.ident == "Some"
             } else {
                 false
             }
         }
+        Expr::MethodCall(method) => method.method == "to_string",
         _ => false,
     }
 }
 
-fn is_none_pattern(pat: &Pat) -> bool {
-    match pat {
-        Pat::Path(path_pat) => {
-            if let Some(segment) = path_pat.path.segments.last() {
-                segment.ident == "None"
-            } else {
-                false
-            }
-        }
-        Pat::Ident(pat_ident) => {
-            // Handle None as an identifier pattern too
-            pat_ident.ident == "None"
-        }
-        _ => false,
+/// Escape JavaScript reserved words and invalid identifiers
+pub fn escape_js_identifier(rust_ident: &str) -> String {
+    const JS_RESERVED: &[&str] = &[
+        "abstract", "arguments", "await", "boolean", "break", "byte", "case", "catch",
+        "char", "class", "const", "continue", "debugger", "default", "delete", "do",
+        "double", "else", "enum", "eval", "export", "extends", "false", "final",
+        "finally", "float", "for", "function", "goto", "if", "implements", "import",
+        "in", "instanceof", "int", "interface", "let", "long", "native", "new",
+        "null", "package", "private", "protected", "public", "return", "short",
+        "static", "super", "switch", "synchronized", "this", "throw", "throws",
+        "transient", "true", "try", "typeof", "var", "void", "volatile", "while",
+        "with", "yield",
+    ];
+
+    if JS_RESERVED.contains(&rust_ident) {
+        format!("{}_", rust_ident)
+    } else {
+        rust_ident.to_string()
     }
 }
 
-// Updated function to extract a variable name from Some(var) pattern
-fn extract_some_var_name(pat: &Pat) -> Option<String> {
-    if let Pat::TupleStruct(tuple_struct) = pat {
-        if let Some(last_segment) = tuple_struct.path.segments.last() {
-            if last_segment.ident == "Some" && !tuple_struct.elems.is_empty() {
-                if let Some(inner_pat) = tuple_struct.elems.first() {
-                    if let Pat::Ident(ident) = inner_pat {
-                        return Some(ident.ident.to_string());
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-// Improved function to check if a match is on an Option
-fn is_option_match_expr(match_expr: &syn::ExprMatch) -> bool {
-    let mut has_some = false;
-    let mut has_none = false;
-
-    for arm in &match_expr.arms {
-        if is_some_pattern(&arm.pat) {
-            has_some = true;
-        } else if is_none_pattern(&arm.pat) {
-            has_none = true;
-        }
-    }
-
-    has_some && has_none
-}
-
-// Map of Rust types to JavaScript types
-pub fn get_js_type(rust_type: &str) -> &'static str {
-    match rust_type {
-        "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" => "number",
-        "f32" | "f64" => "number",
-        "bool" => "boolean",
-        "String" | "&str" | "str" => "string",
-        "Vec" => "Array",
-        "HashMap" | "BTreeMap" | "Map" => "Map",
-        "HashSet" | "BTreeSet" | "Set" => "Set",
-        "Option" => "", // Will be handled specially
-        "Result" => "", // Will be handled specially
-        _ => "object",  // Default for custom types
-    }
-}
-
-// Helper function to generate a JavaScript class for a Rust struct
-pub fn generate_js_class_for_struct(input_struct: &ItemStruct) -> String {
+/// Generate JavaScript class for a Rust struct
+pub fn generate_js_class_for_struct(input_struct: &ItemStruct) -> Result<js::ModuleItem, String> {
+    let mut state = TranspilerState::new();
     let struct_name = input_struct.ident.to_string();
-    let mut js_class = format!("class {} {{\n", struct_name);
-
-    // Constructor
-    js_class.push_str("  constructor(");
 
     let fields: Vec<(String, String)> = match &input_struct.fields {
         Fields::Named(fields_named) => fields_named
@@ -1825,63 +1288,79 @@ pub fn generate_js_class_for_struct(input_struct: &ItemStruct) -> String {
             })
             .collect(),
         Fields::Unnamed(_) => {
-            // Handle tuple structs
             vec![("data".to_string(), "Array".to_string())]
         }
-        Fields::Unit => {
-            // Unit structs have no fields
-            vec![]
-        }
+        Fields::Unit => vec![],
     };
 
-    // Add constructor parameters
-    let field_names: Vec<String> = fields.iter().map(|(name, _)| name.clone()).collect();
-
-    js_class.push_str(&field_names.join(", "));
-    js_class.push_str(") {\n");
-
-    // Initialize fields
-    for (name, _) in &fields {
-        js_class.push_str(&format!("    this.{} = {};\n", name, name));
-    }
-
-    js_class.push_str("  }\n\n");
-
-    // Add toJSON method for serialization
-    js_class.push_str("  toJSON() {\n");
-    js_class.push_str("    return {\n");
-
-    for (name, _) in &fields {
-        js_class.push_str(&format!("      {}: this.{},\n", name, name));
-    }
-
-    js_class.push_str("    };\n");
-    js_class.push_str("  }\n\n");
-
-    // Add fromJSON static method for deserialization
-    js_class.push_str(&format!("  static fromJSON(json) {{\n"));
-    js_class.push_str(&format!("    return new {}(", struct_name));
-
-    let json_field_accessors: Vec<String> = fields
+    // Create constructor parameters
+    let constructor_params: Vec<js::Pat> = fields
         .iter()
-        .map(|(name, _)| format!("json.{}", name))
+        .map(|(name, _)| {
+            js::Pat::Ident(js::BindingIdent {
+                id: state.mk_ident(name),
+                type_ann: None,
+            })
+        })
         .collect();
 
-    js_class.push_str(&json_field_accessors.join(", "));
-    js_class.push_str(");\n");
-    js_class.push_str("  }\n");
+    // Create constructor body
+    let mut constructor_body = Vec::new();
+    for (name, _) in &fields {
+        let assignment = js::Expr::Assign(js::AssignExpr {
+            span: DUMMY_SP,
+            op: js::AssignOp::Assign,
+            left: js::PatOrExpr::Expr(Box::new(state.mk_member_expr(
+                state.mk_this_expr(),
+                name,
+            ))),
+            right: Box::new(js::Expr::Ident(state.mk_ident(name))),
+        });
+        constructor_body.push(state.mk_expr_stmt(assignment));
+    }
 
-    js_class.push_str("}");
+    // Create constructor method
+    let constructor = js::Constructor {
+        span: DUMMY_SP,
+        key: js::PropName::Ident(state.mk_ident("constructor")),
+        params: constructor_params,
+        body: Some(js::BlockStmt {
+            span: DUMMY_SP,
+            stmts: constructor_body,
+            ctxt: SyntaxContext::empty(),
+        }),
+        accessibility: None,
+        is_optional: false,
+    };
 
-    js_class
+    // Create class
+    let class = js::Class {
+        span: DUMMY_SP,
+        decorators: vec![],
+        body: vec![js::ClassMember::Constructor(constructor)],
+        super_class: None,
+        is_abstract: false,
+        type_params: None,
+        super_type_params: None,
+        implements: vec![],
+        ctxt: SyntaxContext::empty(),
+    };
+
+    Ok(js::ModuleItem::Stmt(js::Stmt::Decl(js::Decl::Class(
+        js::ClassDecl {
+            ident: state.mk_ident(&struct_name),
+            declare: false,
+            class: Box::new(class),
+        },
+    ))))
 }
 
-// Helper function to generate JavaScript for a Rust enum
-pub fn generate_js_enum(input_enum: &ItemEnum) -> String {
+/// Generate JavaScript enum
+pub fn generate_js_enum(input_enum: &ItemEnum) -> Result<js::ModuleItem, String> {
+    let mut state = TranspilerState::new();
     let enum_name = input_enum.ident.to_string();
 
-    // Create a JavaScript object with enum variants
-    let mut js_enum = format!("const {} = {{\n", enum_name);
+    let mut properties = Vec::new();
 
     // Add enum variants
     for variant in &input_enum.variants {
@@ -1890,236 +1369,771 @@ pub fn generate_js_enum(input_enum: &ItemEnum) -> String {
         match &variant.fields {
             Fields::Unit => {
                 // Simple enum variants become string values
-                js_enum.push_str(&format!("  {}: '{}',\n", variant_name, variant_name));
+                properties.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+                    js::KeyValueProp {
+                        key: js::PropName::Ident(state.mk_ident(&variant_name)),
+                        value: Box::new(state.mk_str_lit(&variant_name)),
+                    },
+                ))));
             }
-            Fields::Unnamed(_) | Fields::Named(_) => {
-                // Create a factory function for complex variants
-                js_enum.push_str(&format!("  {}(", variant_name));
-
-                let field_types: Vec<String> = match &variant.fields {
-                    Fields::Unnamed(fields) => (0..fields.unnamed.len())
-                        .map(|i| format!("value{}", i))
-                        .collect(),
-                    Fields::Named(fields) => fields
-                        .named
-                        .iter()
-                        .filter_map(|field| field.ident.as_ref().map(|ident| ident.to_string()))
-                        .collect(),
-                    _ => vec![],
+            Fields::Unnamed(fields) | Fields::Named(fields) => {
+                // Create factory function for complex variants
+                let param_count = match &variant.fields {
+                    Fields::Unnamed(f) => f.unnamed.len(),
+                    Fields::Named(f) => f.named.len(),
+                    _ => 0,
                 };
 
-                js_enum.push_str(&field_types.join(", "));
-                js_enum.push_str(") {\n");
-                js_enum.push_str(&format!("    return {{ type: '{}', ", variant_name));
+                let params: Vec<js::Pat> = (0..param_count)
+                    .map(|i| {
+                        js::Pat::Ident(js::BindingIdent {
+                            id: state.mk_ident(&format!("value{}", i)),
+                            type_ann: None,
+                        })
+                    })
+                    .collect();
 
-                match &variant.fields {
-                    Fields::Unnamed(_) => {
-                        js_enum.push_str("values: [");
-                        js_enum.push_str(&field_types.join(", "));
-                        js_enum.push_str("] };\n");
-                    }
-                    Fields::Named(_) => {
-                        for field_name in &field_types {
-                            js_enum.push_str(&format!("{}, ", field_name));
-                        }
-                        js_enum.push_str("};\n");
-                    }
-                    _ => {}
+                // Create function body that returns an object
+                let mut obj_props = vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+                    js::KeyValueProp {
+                        key: js::PropName::Ident(state.mk_ident("type")),
+                        value: Box::new(state.mk_str_lit(&variant_name)),
+                    },
+                )))];
+
+                for i in 0..param_count {
+                    obj_props.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+                        js::KeyValueProp {
+                            key: js::PropName::Ident(state.mk_ident(&format!("value{}", i))),
+                            value: Box::new(js::Expr::Ident(state.mk_ident(&format!("value{}", i)))),
+                        },
+                    ))));
                 }
 
-                js_enum.push_str("  },\n");
+                let return_obj = js::Expr::Object(js::ObjectLit {
+                    span: DUMMY_SP,
+                    props: obj_props,
+                });
+
+                let function_body = js::BlockStmt {
+                    span: DUMMY_SP,
+                    stmts: vec![state.mk_return_stmt(Some(return_obj))],
+                    ctxt: SyntaxContext::empty(),
+                };
+
+                let function = js::Function {
+                    params,
+                    decorators: vec![],
+                    span: DUMMY_SP,
+                    body: Some(function_body),
+                    is_generator: false,
+                    is_async: false,
+                    type_params: None,
+                    return_type: None,
+                    ctxt: SyntaxContext::empty(),
+                };
+
+                properties.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+                    js::KeyValueProp {
+                        key: js::PropName::Ident(state.mk_ident(&variant_name)),
+                        value: Box::new(js::Expr::Fn(js::FnExpr {
+                            ident: None,
+                            function: Box::new(function),
+                        })),
+                    },
+                ))));
             }
         }
     }
 
-    // Add utility methods
-    js_enum.push_str("\n  // Utility method to check the variant type\n");
-    js_enum.push_str("  is(obj, variant) {\n");
-    js_enum.push_str("    if (typeof obj === 'string') {\n");
-    js_enum.push_str("      return obj === this[variant];\n");
-    js_enum.push_str("    }\n");
-    js_enum.push_str("    return obj && obj.type === variant;\n");
-    js_enum.push_str("  },\n");
+    // Create the enum object
+    let enum_obj = js::Expr::Object(js::ObjectLit {
+        span: DUMMY_SP,
+        props: properties,
+    });
 
-    js_enum.push_str("};\n\n");
+    // Create const declaration
+    let var_decl = js::VarDecl {
+        span: DUMMY_SP,
+        kind: js::VarDeclKind::Const,
+        declare: false,
+        decls: vec![js::VarDeclarator {
+            span: DUMMY_SP,
+            name: js::Pat::Ident(js::BindingIdent {
+                id: state.mk_ident(&enum_name),
+                type_ann: None,
+            }),
+            init: Some(Box::new(enum_obj)),
+            definite: false,
+        }],
+        ctxt: SyntaxContext::empty(),
+    };
 
-    // Add type-checking functions
-    js_enum.push_str(&format!("// Type-checking function for {}\n", enum_name));
-    js_enum.push_str(&format!("function is{}(value) {{\n", enum_name));
-    js_enum.push_str("  if (typeof value === 'string') {\n");
-    js_enum.push_str(&format!(
-        "    return Object.values({}).includes(value);\n",
-        enum_name
-    ));
-    js_enum.push_str("  }\n");
-    js_enum.push_str("  if (value && typeof value === 'object' && value.type) {\n");
-    js_enum.push_str(&format!(
-        "    return Object.keys({}).includes(value.type);\n",
-        enum_name
-    ));
-    js_enum.push_str("  }\n");
-    js_enum.push_str("  return false;\n");
-    js_enum.push_str("}");
-
-    js_enum
+    Ok(js::ModuleItem::Stmt(js::Stmt::Decl(js::Decl::Var(Box::new(
+        var_decl,
+    )))))
 }
 
-// Helper function to format Rust types to JavaScript types
+/// Format Rust types to JavaScript-friendly representations
 pub fn format_rust_type(ty: &Type) -> String {
     match ty {
         Type::Path(type_path) => {
             if let Some(segment) = type_path.path.segments.last() {
                 let type_name = segment.ident.to_string();
 
-                // Check for generic types like Vec<T>, Option<T>, etc.
-                if !segment.arguments.is_empty() {
-                    if type_name == "Vec" {
-                        return "Array".to_string();
-                    } else if type_name == "Option" {
-                        return "".to_string(); // Will be handled specially in the conversion logic
-                    } else if type_name == "HashMap" || type_name == "BTreeMap" {
-                        return "Map".to_string();
-                    } else if type_name == "HashSet" || type_name == "BTreeSet" {
-                        return "Set".to_string();
-                    }
-                }
-
-                // Basic types mapping
                 match type_name.as_str() {
                     "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64"
                     | "usize" | "f32" | "f64" => "number".to_string(),
                     "bool" => "boolean".to_string(),
                     "String" | "str" => "string".to_string(),
-                    _ => "object".to_string(), // Default for custom types
+                    "Vec" => "Array".to_string(),
+                    "HashMap" | "BTreeMap" => "Map".to_string(),
+                    "HashSet" | "BTreeSet" => "Set".to_string(),
+                    "Option" => "".to_string(), // Handled specially
+                    "Result" => "".to_string(), // Handled specially
+                    _ => "object".to_string(),
                 }
             } else {
                 "object".to_string()
             }
         }
-        Type::Reference(type_ref) => {
-            // Handle references like &str or &T
-            format_rust_type(&type_ref.elem)
-        }
+        Type::Reference(type_ref) => format_rust_type(&type_ref.elem),
         Type::Array(_) => "Array".to_string(),
         Type::Tuple(_) => "Array".to_string(),
         _ => "object".to_string(),
     }
 }
 
-// Helper function to check if a path ends with a specific segment
-fn path_ends_with(expr: &Expr, segment: &str) -> bool {
-    if let Expr::Path(path) = expr {
-        if let Some(last) = path.path.segments.last() {
-            return last.ident == segment;
-        }
-    }
-    false
-}
+/// Convert JavaScript AST to code string
+pub fn ast_to_code(module_items: &[js::ModuleItem]) -> Result<String, String> {
+    let module = js::Module {
+        span: DUMMY_SP,
+        body: module_items.to_vec(),
+        shebang: None,
+    };
 
-// Helper function to check if an expression is likely a string
-fn is_string_expr(expr: &Expr) -> bool {
-    match expr {
-        Expr::Lit(lit) => {
-            matches!(lit.lit, syn::Lit::Str(_))
-        }
-        Expr::Call(call) => {
-            if let Expr::Path(path) = &*call.func {
-                if let Some(segment) = path.path.segments.last() {
-                    segment.ident == "format" || segment.ident == "to_string"
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
-        }
-        Expr::MethodCall(method) => method.method == "to_string",
-        _ => false,
+    match swc_ecma_codegen::to_code(&module) {
+        Ok(code) => Ok(code),
+        Err(e) => Err(format!("Failed to generate code: {:?}", e)),
     }
 }
 
-// Make sure this function exists and is used:
-pub fn escape_js_identifier(rust_ident: &str) -> String {
-    const JS_RESERVED: &[&str] = &[
-        "abstract",
-        "arguments",
-        "await",
-        "boolean",
-        "break",
-        "byte",
-        "case",
-        "catch",
-        "char",
-        "class",
-        "const",
-        "continue",
-        "debugger",
-        "default",
-        "delete",
-        "do",
-        "double",
-        "else",
-        "enum",
-        "eval",
-        "export",
-        "extends",
-        "false",
-        "final",
-        "finally",
-        "float",
-        "for",
-        "function",
-        "goto",
-        "if",
-        "implements",
-        "import",
-        "in",
-        "instanceof",
-        "int",
-        "interface",
-        "let",
-        "long",
-        "native",
-        "new",
-        "null",
-        "package",
-        "private",
-        "protected",
-        "public",
-        "return",
-        "short",
-        "static",
-        "super",
-        "switch",
-        "synchronized",
-        "this",
-        "throw",
-        "throws",
-        "transient",
-        "true",
-        "try",
-        "typeof",
-        "var",
-        "void",
-        "volatile",
-        "while",
-        "with",
-        "yield",
+/// Convenience function to transpile a complete impl block to JavaScript code
+pub fn transpile_impl_to_js(input_impl: &ItemImpl) -> Result<String, String> {
+    let module_items = generate_js_methods_for_impl(input_impl)?;
+    ast_to_code(&module_items)
+}
+
+/// Convenience function to transpile a struct to JavaScript code
+pub fn transpile_struct_to_js(input_struct: &ItemStruct) -> Result<String, String> {
+    let module_item = generate_js_class_for_struct(input_struct)?;
+    ast_to_code(&[module_item])
+}
+
+/// Convenience function to transpile an enum to JavaScript code
+pub fn transpile_enum_to_js(input_enum: &ItemEnum) -> Result<String, String> {
+    let module_item = generate_js_enum(input_enum)?;
+    ast_to_code(&[module_item])
+}
+
+/// Handle while loops
+fn handle_while_expr(
+    while_expr: &syn::ExprWhile,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    let test = rust_expr_to_js(&while_expr.cond, state)?;
+    let body_stmts = rust_block_to_js(&while_expr.body, state)?;
+
+    let while_stmt = js::Stmt::While(js::WhileStmt {
+        span: DUMMY_SP,
+        test: Box::new(test),
+        body: Box::new(js::Stmt::Block(js::BlockStmt {
+            span: DUMMY_SP,
+            stmts: body_stmts,
+            ctxt: SyntaxContext::empty(),
+        })),
+    });
+
+    Ok(state.mk_iife(vec![while_stmt]))
+}
+
+/// Handle for loops
+fn handle_for_expr(
+    for_expr: &syn::ExprForLoop,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    // Extract the loop variable
+    let loop_var = if let Pat::Ident(pat_ident) = &*for_expr.pat {
+        pat_ident.ident.to_string()
+    } else {
+        return Err("Unsupported for loop pattern".to_string());
+    };
+
+    let js_loop_var = escape_js_identifier(&loop_var);
+    
+    // Convert the iterable expression
+    let iterable = rust_expr_to_js(&for_expr.expr, state)?;
+    
+    // Convert loop body
+    let body_stmts = rust_block_to_js(&for_expr.body, state)?;
+
+    // Create for...of loop
+    let for_stmt = js::Stmt::ForOf(js::ForOfStmt {
+        span: DUMMY_SP,
+        is_await: false,
+        left: js::VarDeclOrPat::VarDecl(Box::new(js::VarDecl {
+            span: DUMMY_SP,
+            kind: js::VarDeclKind::Const,
+            declare: false,
+            decls: vec![js::VarDeclarator {
+                span: DUMMY_SP,
+                name: js::Pat::Ident(js::BindingIdent {
+                    id: state.mk_ident(&js_loop_var),
+                    type_ann: None,
+                }),
+                init: None,
+                definite: false,
+            }],
+            ctxt: SyntaxContext::empty(),
+        })),
+        right: Box::new(iterable),
+        body: Box::new(js::Stmt::Block(js::BlockStmt {
+            span: DUMMY_SP,
+            stmts: body_stmts,
+            ctxt: SyntaxContext::empty(),
+        })),
+    });
+
+    Ok(state.mk_iife(vec![for_stmt]))
+}
+
+/// Handle match expressions
+fn handle_match_expr(
+    match_expr: &syn::ExprMatch,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    let match_value = rust_expr_to_js(&match_expr.expr, state)?;
+    let temp_var = state.generate_temp_var();
+    
+    let mut stmts = vec![
+        state.mk_var_decl(&temp_var, Some(match_value), true)
     ];
 
-    if JS_RESERVED.contains(&rust_ident) {
-        format!("{}_", rust_ident)
-    } else {
-        rust_ident.to_string()
+    let mut if_chain: Option<js::Stmt> = None;
+
+    for (i, arm) in match_expr.arms.iter().enumerate() {
+        let condition = create_match_condition(&arm.pat, &temp_var, state)?;
+        let body_expr = rust_expr_to_js(&arm.body, state)?;
+        let body_stmt = state.mk_return_stmt(Some(body_expr));
+
+        let current_if = js::Stmt::If(js::IfStmt {
+            span: DUMMY_SP,
+            test: Box::new(condition),
+            cons: Box::new(js::Stmt::Block(js::BlockStmt {
+                span: DUMMY_SP,
+                stmts: vec![body_stmt],
+                ctxt: SyntaxContext::empty(),
+            })),
+            alt: None,
+        });
+
+        if i == 0 {
+            if_chain = Some(current_if);
+        } else {
+            // Chain the if statements
+            if let Some(ref mut chain) = if_chain {
+                chain_if_statement(chain, current_if);
+            }
+        }
+    }
+
+    if let Some(if_stmt) = if_chain {
+        stmts.push(if_stmt);
+    }
+
+    // Add default return
+    stmts.push(state.mk_return_stmt(Some(state.mk_undefined())));
+
+    Ok(state.mk_iife(stmts))
+}
+
+/// Create a condition expression for a match arm pattern
+fn create_match_condition(
+    pat: &Pat,
+    match_var: &str,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    match pat {
+        Pat::Lit(lit_pat) => {
+            let lit_expr = match &lit_pat.lit {
+                syn::Lit::Str(s) => state.mk_str_lit(&s.value()),
+                syn::Lit::Int(i) => {
+                    let value = i.base10_parse::<f64>()
+                        .map_err(|e| format!("Failed to parse integer: {}", e))?;
+                    state.mk_num_lit(value)
+                }
+                syn::Lit::Float(f) => {
+                    let value = f.base10_parse::<f64>()
+                        .map_err(|e| format!("Failed to parse float: {}", e))?;
+                    state.mk_num_lit(value)
+                }
+                syn::Lit::Bool(b) => state.mk_bool_lit(b.value()),
+                syn::Lit::Char(c) => state.mk_str_lit(&c.value().to_string()),
+                _ => return Err("Unsupported literal in match pattern".to_string()),
+            };
+
+            Ok(state.mk_binary_expr(
+                js::Expr::Ident(state.mk_ident(match_var)),
+                js::BinaryOp::EqEqEq,
+                lit_expr,
+            ))
+        }
+        Pat::Wild(_) => {
+            // Wildcard pattern always matches
+            Ok(state.mk_bool_lit(true))
+        }
+        Pat::Ident(pat_ident) => {
+            // Variable binding - always matches, but we need to bind the variable
+            let var_name = pat_ident.ident.to_string();
+            let js_var_name = escape_js_identifier(&var_name);
+            state.declare_variable(var_name, js_var_name, false);
+            Ok(state.mk_bool_lit(true))
+        }
+        Pat::Path(path_pat) => {
+            // Handle enum variants like None, Some
+            if let Some(segment) = path_pat.path.segments.last() {
+                let variant_name = segment.ident.to_string();
+                match variant_name.as_str() {
+                    "None" => {
+                        // Check for null or undefined
+                        let null_check = state.mk_binary_expr(
+                            js::Expr::Ident(state.mk_ident(match_var)),
+                            js::BinaryOp::EqEqEq,
+                            state.mk_null_lit(),
+                        );
+                        let undefined_check = state.mk_binary_expr(
+                            js::Expr::Ident(state.mk_ident(match_var)),
+                            js::BinaryOp::EqEqEq,
+                            state.mk_undefined(),
+                        );
+                        Ok(state.mk_binary_expr(null_check, js::BinaryOp::LogicalOr, undefined_check))
+                    }
+                    _ => {
+                        // For other enum variants, compare against string
+                        Ok(state.mk_binary_expr(
+                            js::Expr::Ident(state.mk_ident(match_var)),
+                            js::BinaryOp::EqEqEq,
+                            state.mk_str_lit(&variant_name),
+                        ))
+                    }
+                }
+            } else {
+                Err("Invalid path pattern".to_string())
+            }
+        }
+        Pat::TupleStruct(tuple_struct) => {
+            // Handle Some(x) patterns
+            if let Some(segment) = tuple_struct.path.segments.last() {
+                if segment.ident == "Some" {
+                    // Check that value is not null/undefined
+                    let not_null = state.mk_binary_expr(
+                        js::Expr::Ident(state.mk_ident(match_var)),
+                        js::BinaryOp::NotEqEq,
+                        state.mk_null_lit(),
+                    );
+                    let not_undefined = state.mk_binary_expr(
+                        js::Expr::Ident(state.mk_ident(match_var)),
+                        js::BinaryOp::NotEqEq,
+                        state.mk_undefined(),
+                    );
+                    
+                    // If there's a variable binding in the pattern, handle it
+                    if let Some(inner_pat) = tuple_struct.elems.first() {
+                        if let Pat::Ident(pat_ident) = inner_pat {
+                            let var_name = pat_ident.ident.to_string();
+                            let js_var_name = escape_js_identifier(&var_name);
+                            state.declare_variable(var_name, js_var_name, false);
+                        }
+                    }
+                    
+                    Ok(state.mk_binary_expr(not_null, js::BinaryOp::LogicalAnd, not_undefined))
+                } else {
+                    Err("Unsupported tuple struct pattern".to_string())
+                }
+            } else {
+                Err("Invalid tuple struct pattern".to_string())
+            }
+        }
+        _ => Err("Unsupported match pattern".to_string()),
     }
 }
 
-// Helper function to indent each line of code
-fn indent_lines(code: &str, indent_level: usize) -> String {
-    let indent = " ".repeat(indent_level);
-    code.lines()
-        .map(|line| format!("{}{}", indent, line))
-        .collect::<Vec<String>>()
-        .join("\n")
-        + "\n"
+/// Helper function to chain if statements for match arms
+fn chain_if_statement(current: &mut js::Stmt, next: js::Stmt) {
+    if let js::Stmt::If(ref mut if_stmt) = current {
+        if if_stmt.alt.is_none() {
+            if_stmt.alt = Some(Box::new(next));
+        } else {
+            // Recursively chain
+            if let Some(ref mut alt) = if_stmt.alt {
+                chain_if_statement(alt, next);
+            }
+        }
+    }
 }
+
+/// Handle loop expressions (infinite loops)
+fn handle_loop_expr(
+    loop_expr: &syn::ExprLoop,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    let body_stmts = rust_block_to_js(&loop_expr.body, state)?;
+
+    let while_stmt = js::Stmt::While(js::WhileStmt {
+        span: DUMMY_SP,
+        test: Box::new(state.mk_bool_lit(true)),
+        body: Box::new(js::Stmt::Block(js::BlockStmt {
+            span: DUMMY_SP,
+            stmts: body_stmts,
+            ctxt: SyntaxContext::empty(),
+        })),
+    });
+
+    Ok(state.mk_iife(vec![while_stmt]))
+}
+
+/// Handle closure expressions
+fn handle_closure_expr(
+    closure: &syn::ExprClosure,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    // Extract parameter names
+    let params: Vec<js::Pat> = closure
+        .inputs
+        .iter()
+        .filter_map(|param| {
+            if let Pat::Ident(pat_ident) = param {
+                Some(js::Pat::Ident(js::BindingIdent {
+                    id: state.mk_ident(&pat_ident.ident.to_string()),
+                    type_ann: None,
+                }))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Handle closure body
+    let body = match &*closure.body {
+        Expr::Block(block_expr) => {
+            let stmts = rust_block_to_js(&block_expr.block, state)?;
+            js::BlockStmtOrExpr::BlockStmt(js::BlockStmt {
+                span: DUMMY_SP,
+                stmts,
+                ctxt: SyntaxContext::empty(),
+            })
+        }
+        _ => {
+            let expr = rust_expr_to_js(&closure.body, state)?;
+            js::BlockStmtOrExpr::Expr(Box::new(expr))
+        }
+    };
+
+    Ok(js::Expr::Arrow(js::ArrowExpr {
+        span: DUMMY_SP,
+        params,
+        body: Box::new(body),
+        is_async: false,
+        is_generator: false,
+        type_params: None,
+        return_type: None,
+        ctxt: SyntaxContext::empty(),
+    }))
+}
+
+/// Handle struct literal expressions
+fn handle_struct_expr(
+    struct_expr: &syn::ExprStruct,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    let struct_name = if let Some(ident) = struct_expr.path.get_ident() {
+        ident.to_string()
+    } else {
+        struct_expr.path.segments.last().unwrap().ident.to_string()
+    };
+
+    // Convert field initializers to constructor arguments
+    let args: Result<Vec<_>, _> = struct_expr
+        .fields
+        .iter()
+        .map(|field| rust_expr_to_js(&field.expr, state))
+        .collect();
+
+    let js_args = args?;
+
+    // Create new constructor call
+    let constructor = js::Expr::Ident(state.mk_ident(&struct_name));
+    
+    Ok(js::Expr::New(js::NewExpr {
+        span: DUMMY_SP,
+        callee: Box::new(constructor),
+        args: Some(js_args.into_iter().map(|expr| js::ExprOrSpread {
+            spread: None,
+            expr: Box::new(expr),
+        }).collect()),
+        type_args: None,
+        ctxt: SyntaxContext::empty(),
+    }))
+}
+
+/// Handle range expressions
+fn handle_range_expr(
+    range_expr: &syn::ExprRange,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    match (&range_expr.start, &range_expr.end) {
+        (Some(start), Some(end)) => {
+            let start_js = rust_expr_to_js(start, state)?;
+            let end_js = rust_expr_to_js(end, state)?;
+
+            // Create Array.from({length: end - start}, (_, i) => i + start)
+            let array_from = state.mk_member_expr(
+                js::Expr::Ident(state.mk_ident("Array")),
+                "from",
+            );
+
+            let length_expr = state.mk_binary_expr(
+                end_js.clone(),
+                js::BinaryOp::Sub,
+                start_js.clone(),
+            );
+
+            let length_obj = js::Expr::Object(js::ObjectLit {
+                span: DUMMY_SP,
+                props: vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+                    js::KeyValueProp {
+                        key: js::PropName::Ident(state.mk_ident("length")),
+                        value: Box::new(length_expr),
+                    },
+                )))],
+            });
+
+            // Create (_, i) => i + start
+            let arrow_params = vec![
+                js::Pat::Ident(js::BindingIdent {
+                    id: state.mk_ident("_"),
+                    type_ann: None,
+                }),
+                js::Pat::Ident(js::BindingIdent {
+                    id: state.mk_ident("i"),
+                    type_ann: None,
+                }),
+            ];
+
+            let arrow_body = state.mk_binary_expr(
+                js::Expr::Ident(state.mk_ident("i")),
+                js::BinaryOp::Add,
+                start_js,
+            );
+
+            let arrow_fn = js::ArrowExpr {
+                span: DUMMY_SP,
+                params: arrow_params,
+                body: Box::new(js::BlockStmtOrExpr::Expr(Box::new(arrow_body))),
+                is_async: false,
+                is_generator: false,
+                type_params: None,
+                return_type: None,
+                ctxt: SyntaxContext::empty(),
+            };
+
+            Ok(state.mk_call_expr(array_from, vec![length_obj, js::Expr::Arrow(arrow_fn)]))
+        }
+        (None, Some(end)) => {
+            // Range to end (..end) -> Array.from({length: end}, (_, i) => i)
+            let end_js = rust_expr_to_js(end, state)?;
+            let array_from = state.mk_member_expr(
+                js::Expr::Ident(state.mk_ident("Array")),
+                "from",
+            );
+
+            let length_obj = js::Expr::Object(js::ObjectLit {
+                span: DUMMY_SP,
+                props: vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+                    js::KeyValueProp {
+                        key: js::PropName::Ident(state.mk_ident("length")),
+                        value: Box::new(end_js),
+                    },
+                )))],
+            });
+
+            let arrow_fn = js::ArrowExpr {
+                span: DUMMY_SP,
+                params: vec![
+                    js::Pat::Ident(js::BindingIdent {
+                        id: state.mk_ident("_"),
+                        type_ann: None,
+                    }),
+                    js::Pat::Ident(js::BindingIdent {
+                        id: state.mk_ident("i"),
+                        type_ann: None,
+                    }),
+                ],
+                body: Box::new(js::BlockStmtOrExpr::Expr(Box::new(js::Expr::Ident(
+                    state.mk_ident("i"),
+                )))),
+                is_async: false,
+                is_generator: false,
+                type_params: None,
+                return_type: None,
+                ctxt: SyntaxContext::empty(),
+            };
+
+            Ok(state.mk_call_expr(array_from, vec![length_obj, js::Expr::Arrow(arrow_fn)]))
+        }
+        _ => {
+            // Other range types not easily representable
+            state.add_warning("Infinite or complex ranges not fully supported".to_string());
+            Ok(js::Expr::Array(js::ArrayLit {
+                span: DUMMY_SP,
+                elems: vec![],
+            }))
+        }
+    }
+}
+
+/// Complete the rust_expr_to_js function with remaining expression types
+pub fn rust_expr_to_js_complete(expr: &Expr, state: &mut TranspilerState) -> Result<js::Expr, String> {
+    match expr {
+        // Handle the patterns we already covered in the main function
+        Expr::Lit(_) | Expr::Path(_) | Expr::Binary(_) | Expr::Unary(_) |
+        Expr::MethodCall(_) | Expr::Call(_) | Expr::Field(_) | Expr::If(_) |
+        Expr::Block(_) | Expr::Array(_) | Expr::Index(_) | Expr::Assign(_) |
+        Expr::Return(_) | Expr::Macro(_) => {
+            rust_expr_to_js(expr, state)
+        }
+
+        // Handle additional expression types
+        Expr::While(while_expr) => handle_while_expr(while_expr, state),
+        Expr::ForLoop(for_expr) => handle_for_expr(for_expr, state),
+        Expr::Match(match_expr) => handle_match_expr(match_expr, state),
+        Expr::Loop(loop_expr) => handle_loop_expr(loop_expr, state),
+        Expr::Closure(closure) => handle_closure_expr(closure, state),
+        Expr::Struct(struct_expr) => handle_struct_expr(struct_expr, state),
+        Expr::Range(range_expr) => handle_range_expr(range_expr, state),
+
+        Expr::Paren(paren) => {
+            // Parenthesized expressions
+            let inner = rust_expr_to_js(&paren.expr, state)?;
+            Ok(js::Expr::Paren(js::ParenExpr {
+                span: DUMMY_SP,
+                expr: Box::new(inner),
+            }))
+        }
+
+        Expr::Break(break_expr) => {
+            if let Some(value) = &break_expr.expr {
+                let value_js = rust_expr_to_js(value, state)?;
+                state.add_warning("Break with value requires special handling".to_string());
+                Ok(value_js)
+            } else {
+                state.add_warning("Break statement converted to undefined".to_string());
+                Ok(state.mk_undefined())
+            }
+        }
+
+        Expr::Continue(_) => {
+            state.add_warning("Continue statement converted to undefined".to_string());
+            Ok(state.mk_undefined())
+        }
+
+        Expr::Tuple(tuple) => {
+            // Convert tuple to array
+            let elements: Result<Vec<_>, _> = tuple
+                .elems
+                .iter()
+                .map(|elem| rust_expr_to_js(elem, state))
+                .collect();
+
+            let js_elements: Vec<Option<js::ExprOrSpread>> = elements?
+                .into_iter()
+                .map(|expr| Some(js::ExprOrSpread {
+                    spread: None,
+                    expr: Box::new(expr),
+                }))
+                .collect();
+
+            Ok(js::Expr::Array(js::ArrayLit {
+                span: DUMMY_SP,
+                elems: js_elements,
+            }))
+        }
+
+        _ => {
+            state.add_warning(format!("Unsupported expression type: {:?}", expr));
+            Ok(state.mk_str_lit("/* Unsupported expression */"))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use syn::parse_quote;
+
+    #[test]
+    fn test_simple_method_generation() {
+        let impl_block: ItemImpl = parse_quote! {
+            impl MyStruct {
+                fn new(value: i32) -> Self {
+                    Self { value }
+                }
+                
+                fn get_value(&self) -> i32 {
+                    self.value
+                }
+            }
+        };
+
+        let result = transpile_impl_to_js(&impl_block);
+        assert!(result.is_ok());
+        let js_code = result.unwrap();
+        assert!(js_code.contains("MyStruct.new"));
+        assert!(js_code.contains("MyStruct.prototype.get_value"));
+    }
+
+    #[test]
+    fn test_struct_generation() {
+        let struct_def: ItemStruct = parse_quote! {
+            struct Point {
+                x: f64,
+                y: f64,
+            }
+        };
+
+        let result = transpile_struct_to_js(&struct_def);
+        assert!(result.is_ok());
+        let js_code = result.unwrap();
+        assert!(js_code.contains("class Point"));
+        assert!(js_code.contains("constructor"));
+    }
+
+    #[test]
+    fn test_enum_generation() {
+        let enum_def: ItemEnum = parse_quote! {
+            enum Status {
+                Active,
+                Inactive,
+                Pending(String),
+            }
+        };
+
+        let result = transpile_enum_to_js(&enum_def);
+        assert!(result.is_ok());
+        let js_code = result.unwrap();
+        assert!(js_code.contains("const Status"));
+        assert!(js_code.contains("Active"));
+        assert!(js_code.contains("Pending"));
+    }
+}
+
