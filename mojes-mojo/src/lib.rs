@@ -1,7 +1,7 @@
+use std::collections::HashMap;
 use swc_common::{DUMMY_SP, SyntaxContext};
 use swc_ecma_ast as js;
 use swc_ecma_codegen;
-use std::collections::HashMap;
 use syn::punctuated::Punctuated;
 use syn::token::Comma;
 use syn::{Block, Expr, Fields, ItemEnum, ItemStruct, Pat, Stmt, Type};
@@ -69,11 +69,14 @@ impl TranspilerState {
         if let Some(current_scope) = self.scope_stack.last_mut() {
             current_scope.insert(rust_name.clone(), js_name.clone());
         }
-        self.symbol_table.insert(rust_name, SymbolInfo {
-            js_name,
-            rust_type: "unknown".to_string(),
-            is_mutable,
-        });
+        self.symbol_table.insert(
+            rust_name,
+            SymbolInfo {
+                js_name,
+                rust_type: "unknown".to_string(),
+                is_mutable,
+            },
+        );
     }
 
     pub fn resolve_variable(&self, rust_name: &str) -> Option<String> {
@@ -83,9 +86,11 @@ impl TranspilerState {
                 return Some(js_name.clone());
             }
         }
-        
+
         // Fallback to symbol table
-        self.symbol_table.get(rust_name).map(|info| info.js_name.clone())
+        self.symbol_table
+            .get(rust_name)
+            .map(|info| info.js_name.clone())
     }
 
     pub fn add_error(&mut self, error_message: String) {
@@ -270,7 +275,7 @@ impl TranspilerState {
 /// Generate JavaScript methods for a Rust impl block
 pub fn generate_js_methods_for_impl(input_impl: &ItemImpl) -> Result<Vec<js::ModuleItem>, String> {
     let mut state = TranspilerState::new();
-    
+
     let struct_name = if let syn::Type::Path(type_path) = &*input_impl.self_ty {
         if let Some(segment) = type_path.path.segments.last() {
             segment.ident.to_string()
@@ -358,10 +363,7 @@ fn generate_js_method(
     // Create the assignment statement
     let target = if is_static {
         // Static method: StructName.methodName
-        state.mk_member_expr(
-            js::Expr::Ident(state.mk_ident(struct_name)),
-            &method_name,
-        )
+        state.mk_member_expr(js::Expr::Ident(state.mk_ident(struct_name)), &method_name)
     } else {
         // Instance method: StructName.prototype.methodName
         let prototype =
@@ -386,9 +388,12 @@ fn generate_js_method(
 }
 
 /// Convert Rust block to JavaScript statements
-pub fn rust_block_to_js(block: &Block, state: &mut TranspilerState) -> Result<Vec<js::Stmt>, String> {
+pub fn rust_block_to_js(
+    block: &Block,
+    state: &mut TranspilerState,
+) -> Result<Vec<js::Stmt>, String> {
     let mut js_stmts = Vec::new();
-    
+
     state.enter_scope();
 
     for stmt in &block.stmts {
@@ -399,7 +404,7 @@ pub fn rust_block_to_js(block: &Block, state: &mut TranspilerState) -> Result<Ve
             }
             Stmt::Expr(expr, semi) => {
                 let js_expr = rust_expr_to_js(expr, state)?;
-                
+
                 if semi.is_some() {
                     // Expression with semicolon - treat as statement
                     js_stmts.push(state.mk_expr_stmt(js_expr));
@@ -429,12 +434,14 @@ pub fn rust_expr_to_js(expr: &Expr, state: &mut TranspilerState) -> Result<js::E
         Expr::Lit(lit) => match &lit.lit {
             syn::Lit::Str(s) => Ok(state.mk_str_lit(&s.value())),
             syn::Lit::Int(i) => {
-                let value = i.base10_parse::<f64>()
+                let value = i
+                    .base10_parse::<f64>()
                     .map_err(|e| format!("Failed to parse integer: {}", e))?;
                 Ok(state.mk_num_lit(value))
             }
             syn::Lit::Float(f) => {
-                let value = f.base10_parse::<f64>()
+                let value = f
+                    .base10_parse::<f64>()
                     .map_err(|e| format!("Failed to parse float: {}", e))?;
                 Ok(state.mk_num_lit(value))
             }
@@ -442,19 +449,20 @@ pub fn rust_expr_to_js(expr: &Expr, state: &mut TranspilerState) -> Result<js::E
             syn::Lit::Char(c) => Ok(state.mk_str_lit(&c.value().to_string())),
             _ => Err("Unsupported literal type".to_string()),
         },
-        
+
         // Handle paths (variables, constants)
         Expr::Path(path) => {
             if let Some(last_segment) = path.path.segments.last() {
                 let ident_str = last_segment.ident.to_string();
-                
+
                 match ident_str.as_str() {
                     "self" => Ok(state.mk_this_expr()),
                     "None" => Ok(state.mk_null_lit()),
                     "true" | "false" => Ok(js::Expr::Ident(state.mk_ident(&ident_str))),
                     _ => {
                         // Try to resolve variable
-                        let js_name = state.resolve_variable(&ident_str)
+                        let js_name = state
+                            .resolve_variable(&ident_str)
                             .unwrap_or_else(|| escape_js_identifier(&ident_str));
                         Ok(js::Expr::Ident(state.mk_ident(&js_name)))
                     }
@@ -522,14 +530,10 @@ pub fn rust_expr_to_js(expr: &Expr, state: &mut TranspilerState) -> Result<js::E
         }
 
         // Handle method calls
-        Expr::MethodCall(method_call) => {
-            handle_method_call(method_call, state)
-        }
+        Expr::MethodCall(method_call) => handle_method_call(method_call, state),
 
         // Handle function calls
-        Expr::Call(call) => {
-            handle_function_call(call, state)
-        }
+        Expr::Call(call) => handle_function_call(call, state),
 
         // Handle field access
         Expr::Field(field) => {
@@ -543,9 +547,7 @@ pub fn rust_expr_to_js(expr: &Expr, state: &mut TranspilerState) -> Result<js::E
         }
 
         // Handle if expressions
-        Expr::If(if_expr) => {
-            handle_if_expr(if_expr, state)
-        }
+        Expr::If(if_expr) => handle_if_expr(if_expr, state),
 
         // Handle block expressions
         Expr::Block(block_expr) => {
@@ -563,10 +565,12 @@ pub fn rust_expr_to_js(expr: &Expr, state: &mut TranspilerState) -> Result<js::E
 
             let js_elements: Vec<Option<js::ExprOrSpread>> = elements?
                 .into_iter()
-                .map(|expr| Some(js::ExprOrSpread {
-                    spread: None,
-                    expr: Box::new(expr),
-                }))
+                .map(|expr| {
+                    Some(js::ExprOrSpread {
+                        spread: None,
+                        expr: Box::new(expr),
+                    })
+                })
                 .collect();
 
             Ok(js::Expr::Array(js::ArrayLit {
@@ -616,9 +620,7 @@ pub fn rust_expr_to_js(expr: &Expr, state: &mut TranspilerState) -> Result<js::E
         }
 
         // Handle macro expressions
-        Expr::Macro(macro_expr) => {
-            handle_macro_expr(&macro_expr.mac, state)
-        }
+        Expr::Macro(macro_expr) => handle_macro_expr(&macro_expr.mac, state),
 
         _ => {
             state.add_warning(format!("Unsupported expression type: {:?}", expr));
@@ -626,7 +628,6 @@ pub fn rust_expr_to_js(expr: &Expr, state: &mut TranspilerState) -> Result<js::E
         }
     }
 }
-
 
 // Continuation of lib.rs - Helper functions
 
@@ -656,51 +657,27 @@ fn handle_method_call(
             // .clone() is typically a no-op in JavaScript for primitives
             Ok(receiver)
         }
-        "push" => {
-            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "push"), js_args))
-        }
-        "pop" => {
-            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "pop"), js_args))
-        }
-        "contains" => {
-            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "includes"), js_args))
-        }
-        "to_string" => {
-            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "toString"), js_args))
-        }
+        "push" => Ok(state.mk_call_expr(state.mk_member_expr(receiver, "push"), js_args)),
+        "pop" => Ok(state.mk_call_expr(state.mk_member_expr(receiver, "pop"), js_args)),
+        "contains" => Ok(state.mk_call_expr(state.mk_member_expr(receiver, "includes"), js_args)),
+        "to_string" => Ok(state.mk_call_expr(state.mk_member_expr(receiver, "toString"), js_args)),
         "to_uppercase" => {
             Ok(state.mk_call_expr(state.mk_member_expr(receiver, "toUpperCase"), js_args))
         }
         "to_lowercase" => {
             Ok(state.mk_call_expr(state.mk_member_expr(receiver, "toLowerCase"), js_args))
         }
-        "trim" => {
-            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "trim"), js_args))
-        }
+        "trim" => Ok(state.mk_call_expr(state.mk_member_expr(receiver, "trim"), js_args)),
         "starts_with" => {
             Ok(state.mk_call_expr(state.mk_member_expr(receiver, "startsWith"), js_args))
         }
-        "ends_with" => {
-            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "endsWith"), js_args))
-        }
-        "replace" => {
-            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "replace"), js_args))
-        }
-        "split" => {
-            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "split"), js_args))
-        }
-        "join" => {
-            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "join"), js_args))
-        }
-        "map" => {
-            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "map"), js_args))
-        }
-        "filter" => {
-            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "filter"), js_args))
-        }
-        "find" => {
-            Ok(state.mk_call_expr(state.mk_member_expr(receiver, "find"), js_args))
-        }
+        "ends_with" => Ok(state.mk_call_expr(state.mk_member_expr(receiver, "endsWith"), js_args)),
+        "replace" => Ok(state.mk_call_expr(state.mk_member_expr(receiver, "replace"), js_args)),
+        "split" => Ok(state.mk_call_expr(state.mk_member_expr(receiver, "split"), js_args)),
+        "join" => Ok(state.mk_call_expr(state.mk_member_expr(receiver, "join"), js_args)),
+        "map" => Ok(state.mk_call_expr(state.mk_member_expr(receiver, "map"), js_args)),
+        "filter" => Ok(state.mk_call_expr(state.mk_member_expr(receiver, "filter"), js_args)),
+        "find" => Ok(state.mk_call_expr(state.mk_member_expr(receiver, "find"), js_args)),
         "iter" => {
             // .iter() is typically a no-op in JavaScript
             Ok(receiver)
@@ -711,30 +688,18 @@ fn handle_method_call(
         }
         "is_some" => {
             // Option::is_some() -> value !== null && value !== undefined
-            let null_check = state.mk_binary_expr(
-                receiver.clone(),
-                js::BinaryOp::NotEqEq,
-                state.mk_null_lit(),
-            );
-            let undefined_check = state.mk_binary_expr(
-                receiver,
-                js::BinaryOp::NotEqEq,
-                state.mk_undefined(),
-            );
+            let null_check =
+                state.mk_binary_expr(receiver.clone(), js::BinaryOp::NotEqEq, state.mk_null_lit());
+            let undefined_check =
+                state.mk_binary_expr(receiver, js::BinaryOp::NotEqEq, state.mk_undefined());
             Ok(state.mk_binary_expr(null_check, js::BinaryOp::LogicalAnd, undefined_check))
         }
         "is_none" => {
             // Option::is_none() -> value === null || value === undefined
-            let null_check = state.mk_binary_expr(
-                receiver.clone(),
-                js::BinaryOp::EqEqEq,
-                state.mk_null_lit(),
-            );
-            let undefined_check = state.mk_binary_expr(
-                receiver,
-                js::BinaryOp::EqEqEq,
-                state.mk_undefined(),
-            );
+            let null_check =
+                state.mk_binary_expr(receiver.clone(), js::BinaryOp::EqEqEq, state.mk_null_lit());
+            let undefined_check =
+                state.mk_binary_expr(receiver, js::BinaryOp::EqEqEq, state.mk_undefined());
             Ok(state.mk_binary_expr(null_check, js::BinaryOp::LogicalOr, undefined_check))
         }
         "unwrap" => {
@@ -765,23 +730,19 @@ fn handle_function_call(
     match &*call.func {
         Expr::Path(path) => {
             if let Some(last_segment) = path.path.segments.last() {
-// Continuation of handle_function_call and other helper functions
+                // Continuation of handle_function_call and other helper functions
 
                 let func_name = last_segment.ident.to_string();
-                
+
                 match func_name.as_str() {
                     "println" | "print" => {
-                        let console_log = state.mk_member_expr(
-                            js::Expr::Ident(state.mk_ident("console")),
-                            "log",
-                        );
+                        let console_log =
+                            state.mk_member_expr(js::Expr::Ident(state.mk_ident("console")), "log");
                         Ok(state.mk_call_expr(console_log, js_args))
                     }
                     "eprintln" | "eprint" => {
-                        let console_error = state.mk_member_expr(
-                            js::Expr::Ident(state.mk_ident("console")),
-                            "error",
-                        );
+                        let console_error = state
+                            .mk_member_expr(js::Expr::Ident(state.mk_ident("console")), "error");
                         Ok(state.mk_call_expr(console_error, js_args))
                     }
                     "format" => {
@@ -793,7 +754,10 @@ fn handle_function_call(
                         if js_args.len() == 1 {
                             Ok(js_args.into_iter().next().unwrap())
                         } else {
-                            Err(format!("Some() expects exactly one argument, got {}", js_args.len()))
+                            Err(format!(
+                                "Some() expects exactly one argument, got {}",
+                                js_args.len()
+                            ))
                         }
                     }
                     _ => {
@@ -815,25 +779,20 @@ fn handle_function_call(
 }
 
 /// Handle if expressions
-fn handle_if_expr(
-    if_expr: &syn::ExprIf,
-    state: &mut TranspilerState,
-) -> Result<js::Expr, String> {
+fn handle_if_expr(if_expr: &syn::ExprIf, state: &mut TranspilerState) -> Result<js::Expr, String> {
     let test = rust_expr_to_js(&if_expr.cond, state)?;
     let consequent_stmts = rust_block_to_js(&if_expr.then_branch, state)?;
-    
-    let mut if_stmts = vec![
-        js::Stmt::If(js::IfStmt {
+
+    let mut if_stmts = vec![js::Stmt::If(js::IfStmt {
+        span: DUMMY_SP,
+        test: Box::new(test),
+        cons: Box::new(js::Stmt::Block(js::BlockStmt {
             span: DUMMY_SP,
-            test: Box::new(test),
-            cons: Box::new(js::Stmt::Block(js::BlockStmt {
-                span: DUMMY_SP,
-                stmts: consequent_stmts,
-                ctxt: SyntaxContext::empty(),
-            })),
-            alt: None,
-        })
-    ];
+            stmts: consequent_stmts,
+            ctxt: SyntaxContext::empty(),
+        })),
+        alt: None,
+    })];
 
     // Handle else branch
     if let Some((_, else_branch)) = &if_expr.else_branch {
@@ -867,10 +826,7 @@ fn handle_if_expr(
 }
 
 /// Handle macro expressions
-fn handle_macro_expr(
-    mac: &syn::Macro,
-    state: &mut TranspilerState,
-) -> Result<js::Expr, String> {
+fn handle_macro_expr(mac: &syn::Macro, state: &mut TranspilerState) -> Result<js::Expr, String> {
     let macro_name = if let Some(segment) = mac.path.segments.last() {
         segment.ident.to_string()
     } else {
@@ -881,11 +837,13 @@ fn handle_macro_expr(
 
     match macro_name.as_str() {
         "println" | "print" => {
-            let console_method = if macro_name == "println" { "log" } else { "log" };
-            let console_expr = state.mk_member_expr(
-                js::Expr::Ident(state.mk_ident("console")),
-                console_method,
-            );
+            let console_method = if macro_name == "println" {
+                "log"
+            } else {
+                "log"
+            };
+            let console_expr =
+                state.mk_member_expr(js::Expr::Ident(state.mk_ident("console")), console_method);
 
             if tokens.trim().is_empty() {
                 Ok(state.mk_call_expr(console_expr, vec![]))
@@ -900,10 +858,8 @@ fn handle_macro_expr(
             }
         }
         "eprintln" | "eprint" => {
-            let console_expr = state.mk_member_expr(
-                js::Expr::Ident(state.mk_ident("console")),
-                "error",
-            );
+            let console_expr =
+                state.mk_member_expr(js::Expr::Ident(state.mk_ident("console")), "error");
 
             if tokens.trim().is_empty() {
                 Ok(state.mk_call_expr(console_expr, vec![]))
@@ -915,9 +871,7 @@ fn handle_macro_expr(
                 Ok(state.mk_call_expr(console_expr, vec![arg]))
             }
         }
-        "format" => {
-            handle_format_like_macro(&tokens, state)
-        }
+        "format" => handle_format_like_macro(&tokens, state),
         "vec" => {
             if tokens.trim().is_empty() {
                 // vec!() -> []
@@ -931,22 +885,22 @@ fn handle_macro_expr(
                 if parts.len() == 2 {
                     let value_expr = parse_macro_tokens(parts[0].trim(), state)?;
                     let count_expr = parse_macro_tokens(parts[1].trim(), state)?;
-                    
+
                     // Create Array.from call
-                    let array_from = state.mk_member_expr(
-                        js::Expr::Ident(state.mk_ident("Array")),
-                        "from",
-                    );
-                    
+                    let array_from =
+                        state.mk_member_expr(js::Expr::Ident(state.mk_ident("Array")), "from");
+
                     // Create {length: count} object
                     let length_obj = js::Expr::Object(js::ObjectLit {
                         span: DUMMY_SP,
-                        props: vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(js::KeyValueProp {
-                            key: js::PropName::Ident(state.mk_ident("length")),
-                            value: Box::new(count_expr),
-                        })))],
+                        props: vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+                            js::KeyValueProp {
+                                key: js::PropName::Ident(state.mk_ident("length")),
+                                value: Box::new(count_expr),
+                            },
+                        )))],
                     });
-                    
+
                     // Create () => value arrow function
                     let arrow_fn = js::ArrowExpr {
                         span: DUMMY_SP,
@@ -958,7 +912,7 @@ fn handle_macro_expr(
                         return_type: None,
                         ctxt: SyntaxContext::empty(),
                     };
-                    
+
                     Ok(state.mk_call_expr(array_from, vec![length_obj, js::Expr::Arrow(arrow_fn)]))
                 } else {
                     Err("Invalid vec! syntax with semicolon".to_string())
@@ -968,10 +922,12 @@ fn handle_macro_expr(
                 let elements = parse_comma_separated_exprs(&tokens, state)?;
                 let js_elements: Vec<Option<js::ExprOrSpread>> = elements
                     .into_iter()
-                    .map(|expr| Some(js::ExprOrSpread {
-                        spread: None,
-                        expr: Box::new(expr),
-                    }))
+                    .map(|expr| {
+                        Some(js::ExprOrSpread {
+                            spread: None,
+                            expr: Box::new(expr),
+                        })
+                    })
                     .collect();
 
                 Ok(js::Expr::Array(js::ArrayLit {
@@ -990,7 +946,7 @@ fn handle_format_like_macro(
     state: &mut TranspilerState,
 ) -> Result<js::Expr, String> {
     let parts = smart_comma_split(token_string);
-    
+
     if parts.is_empty() {
         return Ok(state.mk_str_lit(""));
     }
@@ -1016,19 +972,19 @@ fn handle_format_like_macro(
 
     // Split format string at placeholders
     let str_parts: Vec<&str> = format_str.split("{}").collect();
-    
+
     // Create template literal
     let mut template_parts = Vec::new();
     let mut template_exprs = Vec::new();
-    
+
     for (i, part) in str_parts.iter().enumerate() {
         template_parts.push(part.to_string());
-        
+
         if i < js_args.len() {
             template_exprs.push(js_args[i].clone());
         }
     }
-    
+
     // Handle the case where we have more parts than expressions
     if template_parts.len() > template_exprs.len() + 1 {
         // Add empty expressions for missing placeholders
@@ -1069,31 +1025,31 @@ fn handle_format_macro(
 
                 // Split format string at placeholders
                 let parts: Vec<&str> = format_str.split("{}").collect();
-                
+
                 // Create template literal
                 let template_parts: Vec<String> = parts.iter().map(|s| s.to_string()).collect();
-                
+
                 return Ok(state.mk_template_literal(template_parts, js_args));
             }
         }
     }
 
     // Fallback: concatenate arguments
-    let js_args: Result<Vec<_>, _> = args
-        .iter()
-        .map(|arg| rust_expr_to_js(arg, state))
-        .collect();
-    
+    let js_args: Result<Vec<_>, _> = args.iter().map(|arg| rust_expr_to_js(arg, state)).collect();
+
     let args_vec = js_args?;
     if args_vec.len() == 1 {
         Ok(args_vec.into_iter().next().unwrap())
     } else {
         // Join with spaces - this is a simplification
-        let joined = args_vec.into_iter().reduce(|acc, expr| {
-            state.mk_binary_expr(acc, js::BinaryOp::Add, state.mk_str_lit(" "));
-            state.mk_binary_expr(acc, js::BinaryOp::Add, expr)
-        }).unwrap_or_else(|| state.mk_str_lit(""));
-        
+        let joined = args_vec
+            .into_iter()
+            .reduce(|acc, expr| {
+                state.mk_binary_expr(acc, js::BinaryOp::Add, state.mk_str_lit(" "));
+                state.mk_binary_expr(acc, js::BinaryOp::Add, expr)
+            })
+            .unwrap_or_else(|| state.mk_str_lit(""));
+
         Ok(joined)
     }
 }
@@ -1111,9 +1067,9 @@ fn handle_local_statement(
                 let var_name = pat_ident.ident.to_string();
                 let js_var_name = escape_js_identifier(&var_name);
                 let is_mutable = pat_ident.mutability.is_some();
-                
+
                 state.declare_variable(var_name, js_var_name.clone(), is_mutable);
-                
+
                 Ok(state.mk_var_decl(&js_var_name, Some(init_expr), !is_mutable))
             }
             Pat::Tuple(tuple_pat) => {
@@ -1169,9 +1125,9 @@ fn handle_local_statement(
             let var_name = pat_ident.ident.to_string();
             let js_var_name = escape_js_identifier(&var_name);
             let is_mutable = pat_ident.mutability.is_some();
-            
+
             state.declare_variable(var_name, js_var_name.clone(), is_mutable);
-            
+
             Ok(state.mk_var_decl(&js_var_name, None, false)) // Always use let for uninitialized
         } else {
             Err("Unsupported variable pattern".to_string())
@@ -1182,7 +1138,7 @@ fn handle_local_statement(
 /// Parse macro tokens into a JavaScript expression
 fn parse_macro_tokens(tokens: &str, state: &mut TranspilerState) -> Result<js::Expr, String> {
     let trimmed = tokens.trim();
-    
+
     // Try to parse as a Rust expression first
     if let Ok(parsed_expr) = syn::parse_str::<syn::Expr>(trimmed) {
         rust_expr_to_js(&parsed_expr, state)
@@ -1266,15 +1222,70 @@ fn is_string_expr(expr: &Expr) -> bool {
 /// Escape JavaScript reserved words and invalid identifiers
 pub fn escape_js_identifier(rust_ident: &str) -> String {
     const JS_RESERVED: &[&str] = &[
-        "abstract", "arguments", "await", "boolean", "break", "byte", "case", "catch",
-        "char", "class", "const", "continue", "debugger", "default", "delete", "do",
-        "double", "else", "enum", "eval", "export", "extends", "false", "final",
-        "finally", "float", "for", "function", "goto", "if", "implements", "import",
-        "in", "instanceof", "int", "interface", "let", "long", "native", "new",
-        "null", "package", "private", "protected", "public", "return", "short",
-        "static", "super", "switch", "synchronized", "this", "throw", "throws",
-        "transient", "true", "try", "typeof", "var", "void", "volatile", "while",
-        "with", "yield",
+        "abstract",
+        "arguments",
+        "await",
+        "boolean",
+        "break",
+        "byte",
+        "case",
+        "catch",
+        "char",
+        "class",
+        "const",
+        "continue",
+        "debugger",
+        "default",
+        "delete",
+        "do",
+        "double",
+        "else",
+        "enum",
+        "eval",
+        "export",
+        "extends",
+        "false",
+        "final",
+        "finally",
+        "float",
+        "for",
+        "function",
+        "goto",
+        "if",
+        "implements",
+        "import",
+        "in",
+        "instanceof",
+        "int",
+        "interface",
+        "let",
+        "long",
+        "native",
+        "new",
+        "null",
+        "package",
+        "private",
+        "protected",
+        "public",
+        "return",
+        "short",
+        "static",
+        "super",
+        "switch",
+        "synchronized",
+        "this",
+        "throw",
+        "throws",
+        "transient",
+        "true",
+        "try",
+        "typeof",
+        "var",
+        "void",
+        "volatile",
+        "while",
+        "with",
+        "yield",
     ];
 
     if JS_RESERVED.contains(&rust_ident) {
@@ -1418,7 +1429,9 @@ pub fn generate_js_enum(input_enum: &ItemEnum) -> Result<js::ModuleItem, String>
                     obj_props.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
                         js::KeyValueProp {
                             key: js::PropName::Ident(state.mk_ident(&format!("value{}", i))),
-                            value: Box::new(js::Expr::Ident(state.mk_ident(&format!("value{}", i)))),
+                            value: Box::new(js::Expr::Ident(
+                                state.mk_ident(&format!("value{}", i)),
+                            )),
                         },
                     ))));
                 }
@@ -1482,9 +1495,9 @@ pub fn generate_js_enum(input_enum: &ItemEnum) -> Result<js::ModuleItem, String>
         ctxt: SyntaxContext::empty(),
     };
 
-    Ok(js::ModuleItem::Stmt(js::Stmt::Decl(js::Decl::Var(Box::new(
-        var_decl,
-    )))))
+    Ok(js::ModuleItem::Stmt(js::Stmt::Decl(js::Decl::Var(
+        Box::new(var_decl),
+    ))))
 }
 
 /// Format Rust types to JavaScript-friendly representations
@@ -1583,10 +1596,10 @@ fn handle_for_expr(
     };
 
     let js_loop_var = escape_js_identifier(&loop_var);
-    
+
     // Convert the iterable expression
     let iterable = rust_expr_to_js(&for_expr.expr, state)?;
-    
+
     // Convert loop body
     let body_stmts = rust_block_to_js(&for_expr.body, state)?;
 
@@ -1627,10 +1640,8 @@ fn handle_match_expr(
 ) -> Result<js::Expr, String> {
     let match_value = rust_expr_to_js(&match_expr.expr, state)?;
     let temp_var = state.generate_temp_var();
-    
-    let mut stmts = vec![
-        state.mk_var_decl(&temp_var, Some(match_value), true)
-    ];
+
+    let mut stmts = vec![state.mk_var_decl(&temp_var, Some(match_value), true)];
 
     let mut if_chain: Option<js::Stmt> = None;
 
@@ -1681,12 +1692,14 @@ fn create_match_condition(
             let lit_expr = match &lit_pat.lit {
                 syn::Lit::Str(s) => state.mk_str_lit(&s.value()),
                 syn::Lit::Int(i) => {
-                    let value = i.base10_parse::<f64>()
+                    let value = i
+                        .base10_parse::<f64>()
                         .map_err(|e| format!("Failed to parse integer: {}", e))?;
                     state.mk_num_lit(value)
                 }
                 syn::Lit::Float(f) => {
-                    let value = f.base10_parse::<f64>()
+                    let value = f
+                        .base10_parse::<f64>()
                         .map_err(|e| format!("Failed to parse float: {}", e))?;
                     state.mk_num_lit(value)
                 }
@@ -1729,7 +1742,11 @@ fn create_match_condition(
                             js::BinaryOp::EqEqEq,
                             state.mk_undefined(),
                         );
-                        Ok(state.mk_binary_expr(null_check, js::BinaryOp::LogicalOr, undefined_check))
+                        Ok(state.mk_binary_expr(
+                            null_check,
+                            js::BinaryOp::LogicalOr,
+                            undefined_check,
+                        ))
                     }
                     _ => {
                         // For other enum variants, compare against string
@@ -1759,7 +1776,7 @@ fn create_match_condition(
                         js::BinaryOp::NotEqEq,
                         state.mk_undefined(),
                     );
-                    
+
                     // If there's a variable binding in the pattern, handle it
                     if let Some(inner_pat) = tuple_struct.elems.first() {
                         if let Pat::Ident(pat_ident) = inner_pat {
@@ -1768,7 +1785,7 @@ fn create_match_condition(
                             state.declare_variable(var_name, js_var_name, false);
                         }
                     }
-                    
+
                     Ok(state.mk_binary_expr(not_null, js::BinaryOp::LogicalAnd, not_undefined))
                 } else {
                     Err("Unsupported tuple struct pattern".to_string())
@@ -1886,14 +1903,19 @@ fn handle_struct_expr(
 
     // Create new constructor call
     let constructor = js::Expr::Ident(state.mk_ident(&struct_name));
-    
+
     Ok(js::Expr::New(js::NewExpr {
         span: DUMMY_SP,
         callee: Box::new(constructor),
-        args: Some(js_args.into_iter().map(|expr| js::ExprOrSpread {
-            spread: None,
-            expr: Box::new(expr),
-        }).collect()),
+        args: Some(
+            js_args
+                .into_iter()
+                .map(|expr| js::ExprOrSpread {
+                    spread: None,
+                    expr: Box::new(expr),
+                })
+                .collect(),
+        ),
         type_args: None,
         ctxt: SyntaxContext::empty(),
     }))
@@ -1910,16 +1932,10 @@ fn handle_range_expr(
             let end_js = rust_expr_to_js(end, state)?;
 
             // Create Array.from({length: end - start}, (_, i) => i + start)
-            let array_from = state.mk_member_expr(
-                js::Expr::Ident(state.mk_ident("Array")),
-                "from",
-            );
+            let array_from = state.mk_member_expr(js::Expr::Ident(state.mk_ident("Array")), "from");
 
-            let length_expr = state.mk_binary_expr(
-                end_js.clone(),
-                js::BinaryOp::Sub,
-                start_js.clone(),
-            );
+            let length_expr =
+                state.mk_binary_expr(end_js.clone(), js::BinaryOp::Sub, start_js.clone());
 
             let length_obj = js::Expr::Object(js::ObjectLit {
                 span: DUMMY_SP,
@@ -1965,10 +1981,7 @@ fn handle_range_expr(
         (None, Some(end)) => {
             // Range to end (..end) -> Array.from({length: end}, (_, i) => i)
             let end_js = rust_expr_to_js(end, state)?;
-            let array_from = state.mk_member_expr(
-                js::Expr::Ident(state.mk_ident("Array")),
-                "from",
-            );
+            let array_from = state.mk_member_expr(js::Expr::Ident(state.mk_ident("Array")), "from");
 
             let length_obj = js::Expr::Object(js::ObjectLit {
                 span: DUMMY_SP,
@@ -2016,15 +2029,26 @@ fn handle_range_expr(
 }
 
 /// Complete the rust_expr_to_js function with remaining expression types
-pub fn rust_expr_to_js_complete(expr: &Expr, state: &mut TranspilerState) -> Result<js::Expr, String> {
+pub fn rust_expr_to_js_complete(
+    expr: &Expr,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
     match expr {
         // Handle the patterns we already covered in the main function
-        Expr::Lit(_) | Expr::Path(_) | Expr::Binary(_) | Expr::Unary(_) |
-        Expr::MethodCall(_) | Expr::Call(_) | Expr::Field(_) | Expr::If(_) |
-        Expr::Block(_) | Expr::Array(_) | Expr::Index(_) | Expr::Assign(_) |
-        Expr::Return(_) | Expr::Macro(_) => {
-            rust_expr_to_js(expr, state)
-        }
+        Expr::Lit(_)
+        | Expr::Path(_)
+        | Expr::Binary(_)
+        | Expr::Unary(_)
+        | Expr::MethodCall(_)
+        | Expr::Call(_)
+        | Expr::Field(_)
+        | Expr::If(_)
+        | Expr::Block(_)
+        | Expr::Array(_)
+        | Expr::Index(_)
+        | Expr::Assign(_)
+        | Expr::Return(_)
+        | Expr::Macro(_) => rust_expr_to_js(expr, state),
 
         // Handle additional expression types
         Expr::While(while_expr) => handle_while_expr(while_expr, state),
@@ -2070,10 +2094,12 @@ pub fn rust_expr_to_js_complete(expr: &Expr, state: &mut TranspilerState) -> Res
 
             let js_elements: Vec<Option<js::ExprOrSpread>> = elements?
                 .into_iter()
-                .map(|expr| Some(js::ExprOrSpread {
-                    spread: None,
-                    expr: Box::new(expr),
-                }))
+                .map(|expr| {
+                    Some(js::ExprOrSpread {
+                        spread: None,
+                        expr: Box::new(expr),
+                    })
+                })
                 .collect();
 
             Ok(js::Expr::Array(js::ArrayLit {
@@ -2101,7 +2127,7 @@ mod tests {
                 fn new(value: i32) -> Self {
                     Self { value }
                 }
-                
+
                 fn get_value(&self) -> i32 {
                     self.value
                 }
@@ -2149,4 +2175,3 @@ mod tests {
         assert!(js_code.contains("Pending"));
     }
 }
-
