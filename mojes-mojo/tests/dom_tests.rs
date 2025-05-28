@@ -68,7 +68,7 @@ mod tests_dom {
         assert!(!js_code.contains("})()"));
 
         // Should contain proper arrow function
-        assert!(js_code.contains("() => {"));
+        assert!(js_code.contains("() => {") || js_code.contains("()=>{"));
         assert!(js_code.contains("console.log"));
 
         // Should be valid JS
@@ -96,7 +96,7 @@ mod tests_dom {
         assert!(!js_code.contains("})()"));
 
         // Should contain proper arrow function
-        assert!(js_code.contains("() => {"));
+        assert!(js_code.contains("() => {") || js_code.contains("()=>{"));
         assert!(js_code.contains("console.log"));
     }
 
