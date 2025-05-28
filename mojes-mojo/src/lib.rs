@@ -1319,7 +1319,7 @@ fn handle_local_statement(
                     })
                     .collect();
 
-                // Create object destructuring pattern
+                // Create object destructuring pattern using shorthand syntax
                 let destructure_pattern = js::Pat::Object(js::ObjectPat {
                     span: DUMMY_SP,
                     props: field_names
@@ -1327,12 +1327,14 @@ fn handle_local_statement(
                         .map(|name| {
                             let js_name = escape_js_identifier(name);
                             state.declare_variable(name.clone(), js_name.clone(), false);
-                            js::ObjectPatProp::KeyValue(js::KeyValuePatProp {
-                                key: js::PropName::Ident(state.mk_ident_name(name)),
-                                value: Box::new(js::Pat::Ident(js::BindingIdent {
+                            // Use shorthand property syntax for destructuring
+                            js::ObjectPatProp::Assign(js::AssignPatProp {
+                                span: DUMMY_SP,
+                                key: js::BindingIdent {
                                     id: state.mk_ident(&js_name),
                                     type_ann: None,
-                                })),
+                                },
+                                value: None, // None means shorthand syntax
                             })
                         })
                         .collect(),
