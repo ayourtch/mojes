@@ -1686,7 +1686,7 @@ pub fn generate_js_class_for_struct_with_state(
 }
 
 /// Generate JavaScript enum
-pub fn generate_js_enum_with_state(input_enum: &ItemEnum) -> Result<js::ModuleItem, String> {
+pub fn generate_js_enum_with_state(input_enum: &ItemEnum) -> Result<Vec<js::ModuleItem>, String> {
     let mut state = TranspilerState::new();
     let enum_name = input_enum.ident.to_string();
 
@@ -1788,63 +1788,14 @@ pub fn generate_js_enum_with_state(input_enum: &ItemEnum) -> Result<js::ModuleIt
         }
     }
 
-    // Add isEnumName function (e.g., isMessage)
-    let is_function_name = format!("is{}", enum_name);
-    let is_function_body = js::BlockStmt {
-        span: DUMMY_SP,
-        stmts: vec![state.mk_return_stmt(Some(state.mk_binary_expr(
-            state.mk_binary_expr(
-                js::Expr::Ident(state.mk_ident("obj")),
-                js::BinaryOp::NotEqEq,
-                state.mk_null_lit(),
-            ),
-            js::BinaryOp::LogicalAnd,
-            state.mk_binary_expr(
-                js::Expr::Unary(js::UnaryExpr {
-                    span: DUMMY_SP,
-                    op: js::UnaryOp::TypeOf,
-                    arg: Box::new(js::Expr::Ident(state.mk_ident("obj"))),
-                }),
-                js::BinaryOp::EqEqEq,
-                state.mk_str_lit("object"),
-            ),
-        )))],
-        ctxt: SyntaxContext::empty(),
-    };
-
-    let is_function = js::Function {
-        params: vec![state.pat_to_param(js::Pat::Ident(js::BindingIdent {
-            id: state.mk_ident("obj"),
-            type_ann: None,
-        }))],
-        decorators: vec![],
-        span: DUMMY_SP,
-        body: Some(is_function_body),
-        is_generator: false,
-        is_async: false,
-        type_params: None,
-        return_type: None,
-        ctxt: SyntaxContext::empty(),
-    };
-
-    properties.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
-        js::KeyValueProp {
-            key: js::PropName::Ident(state.mk_ident_name(&is_function_name)),
-            value: Box::new(js::Expr::Fn(js::FnExpr {
-                ident: None,
-                function: Box::new(is_function),
-            })),
-        },
-    ))));
-
     // Create the enum object
     let enum_obj = js::Expr::Object(js::ObjectLit {
         span: DUMMY_SP,
         props: properties,
     });
 
-    // Create const declaration
-    let var_decl = js::VarDecl {
+    // Create const declaration for the enum
+    let enum_var_decl = js::VarDecl {
         span: DUMMY_SP,
         kind: js::VarDeclKind::Const,
         declare: false,
@@ -1860,9 +1811,130 @@ pub fn generate_js_enum_with_state(input_enum: &ItemEnum) -> Result<js::ModuleIt
         ctxt: SyntaxContext::empty(),
     };
 
-    Ok(js::ModuleItem::Stmt(js::Stmt::Decl(js::Decl::Var(
-        Box::new(var_decl),
-    ))))
+    let mut items = vec![js::ModuleItem::Stmt(js::Stmt::Decl(js::Decl::Var(
+        Box::new(enum_var_decl),
+    )))];
+
+    // Create standalone isEnumName function
+    let is_function_name = format!("is{}", enum_name);
+
+    // Create function body with the same logic as the old code
+    let function_body =
+        js::BlockStmt {
+            span: DUMMY_SP,
+            stmts: vec![
+                // if (typeof value === 'string') {
+                js::Stmt::If(js::IfStmt {
+                    span: DUMMY_SP,
+                    test: Box::new(state.mk_binary_expr(
+                        js::Expr::Unary(js::UnaryExpr {
+                            span: DUMMY_SP,
+                            op: js::UnaryOp::TypeOf,
+                            arg: Box::new(js::Expr::Ident(state.mk_ident("value"))),
+                        }),
+                        js::BinaryOp::EqEqEq,
+                        state.mk_str_lit("string"),
+                    )),
+                    cons: Box::new(js::Stmt::Block(js::BlockStmt {
+                        span: DUMMY_SP,
+                        stmts: vec![
+                            // return Object.values(EnumName).includes(value);
+                            state.mk_return_stmt(Some(state.mk_call_expr(
+                                state.mk_member_expr(
+                                    state.mk_call_expr(
+                                        state.mk_member_expr(
+                                            js::Expr::Ident(state.mk_ident("Object")),
+                                            "values",
+                                        ),
+                                        vec![js::Expr::Ident(state.mk_ident(&enum_name))],
+                                    ),
+                                    "includes",
+                                ),
+                                vec![js::Expr::Ident(state.mk_ident("value"))],
+                            ))),
+                        ],
+                        ctxt: SyntaxContext::empty(),
+                    })),
+                    alt: None,
+                }),
+                // if (value && typeof value === 'object' && value.type) {
+                js::Stmt::If(js::IfStmt {
+                    span: DUMMY_SP,
+                    test: Box::new(state.mk_binary_expr(
+                        state.mk_binary_expr(
+                            js::Expr::Ident(state.mk_ident("value")),
+                            js::BinaryOp::LogicalAnd,
+                            state.mk_binary_expr(
+                                js::Expr::Unary(js::UnaryExpr {
+                                    span: DUMMY_SP,
+                                    op: js::UnaryOp::TypeOf,
+                                    arg: Box::new(js::Expr::Ident(state.mk_ident("value"))),
+                                }),
+                                js::BinaryOp::EqEqEq,
+                                state.mk_str_lit("object"),
+                            ),
+                        ),
+                        js::BinaryOp::LogicalAnd,
+                        state.mk_member_expr(js::Expr::Ident(state.mk_ident("value")), "type"),
+                    )),
+                    cons: Box::new(js::Stmt::Block(js::BlockStmt {
+                        span: DUMMY_SP,
+                        stmts: vec![
+                            // return Object.keys(EnumName).includes(value.type);
+                            state.mk_return_stmt(Some(state.mk_call_expr(
+                                state.mk_member_expr(
+                                    state.mk_call_expr(
+                                        state.mk_member_expr(
+                                            js::Expr::Ident(state.mk_ident("Object")),
+                                            "keys",
+                                        ),
+                                        vec![js::Expr::Ident(state.mk_ident(&enum_name))],
+                                    ),
+                                    "includes",
+                                ),
+                                vec![state.mk_member_expr(
+                                    js::Expr::Ident(state.mk_ident("value")),
+                                    "type",
+                                )],
+                            ))),
+                        ],
+                        ctxt: SyntaxContext::empty(),
+                    })),
+                    alt: None,
+                }),
+                // return false;
+                state.mk_return_stmt(Some(state.mk_bool_lit(false))),
+            ],
+            ctxt: SyntaxContext::empty(),
+        };
+
+    let is_function = js::Function {
+        params: vec![state.pat_to_param(js::Pat::Ident(js::BindingIdent {
+            id: state.mk_ident("value"),
+            type_ann: None,
+        }))],
+        decorators: vec![],
+        span: DUMMY_SP,
+        body: Some(function_body),
+        is_generator: false,
+        is_async: false,
+        type_params: None,
+        return_type: None,
+        ctxt: SyntaxContext::empty(),
+    };
+
+    // Create function declaration
+    let is_function_decl = js::FnDecl {
+        ident: state.mk_ident(&is_function_name),
+        declare: false,
+        function: Box::new(is_function),
+    };
+
+    items.push(js::ModuleItem::Stmt(js::Stmt::Decl(js::Decl::Fn(
+        is_function_decl,
+    ))));
+
+    Ok(items)
 }
 
 /// Format Rust types to JavaScript-friendly representations
@@ -1983,8 +2055,8 @@ pub fn transpile_struct_to_js(input_struct: &ItemStruct) -> Result<String, Strin
 
 /// Convenience function to transpile an enum to JavaScript code
 pub fn transpile_enum_to_js(input_enum: &ItemEnum) -> Result<String, String> {
-    let module_item = generate_js_enum_with_state(input_enum)?;
-    ast_to_code(&[module_item])
+    let module_items = generate_js_enum_with_state(input_enum)?;
+    ast_to_code(&module_items)
 }
 
 /// Handle while loops
@@ -2875,9 +2947,10 @@ pub fn generate_js_class_for_struct(input_struct: &ItemStruct) -> String {
 }
 
 /// Generate JavaScript enum (old API)
+
 pub fn generate_js_enum(input_enum: &ItemEnum) -> String {
-    let module_item =
+    let module_items =
         generate_js_enum_with_state(input_enum).expect("Failed to generate JavaScript enum");
 
-    ast_to_code(&[module_item]).expect("Failed to convert enum AST to JavaScript code")
+    ast_to_code(&module_items).expect("Failed to convert enum AST to JavaScript code")
 }
