@@ -488,6 +488,9 @@ pub fn rust_expr_to_js_with_state(
             _ => Err("Unsupported literal type".to_string()),
         },
 
+        // Handle reference expressions
+        Expr::Reference(ref_expr) => handle_reference_expr(ref_expr, state),
+
         // Handle paths (variables, constants)
         Expr::Path(path) => {
             if let Some(last_segment) = path.path.segments.last() {
@@ -2347,6 +2350,45 @@ pub fn handle_format_macro(args: &Punctuated<Expr, Comma>) -> String {
         .trim_end()
         .trim_end_matches(';')
         .to_string()
+}
+
+/// Handle reference expressions (&x, &mut y, &expr)
+fn handle_reference_expr(
+    ref_expr: &syn::ExprReference,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    let inner_expr = rust_expr_to_js_with_state(&ref_expr.expr, state)?;
+
+    match &*ref_expr.expr {
+        // For simple path expressions (variables), handle specially
+        Expr::Path(_) => {
+            if ref_expr.mutability.is_some() {
+                // Mutable reference - add comment
+                let var_name = match &inner_expr {
+                    js::Expr::Ident(ident) => ident.sym.to_string(),
+                    _ => "unknown".to_string(),
+                };
+                Ok(state.mk_str_lit(&format!("{} /* was &mut in Rust */", var_name)))
+            } else {
+                // Immutable reference to variable - just return the variable
+                Ok(inner_expr)
+            }
+        }
+        // For string literals, just return the literal (no comment needed)
+        Expr::Lit(lit) if matches!(lit.lit, syn::Lit::Str(_)) => Ok(inner_expr),
+        // For other expressions, add a comment
+        _ => {
+            let comment = if ref_expr.mutability.is_some() {
+                " /* was &mut in Rust */"
+            } else {
+                " /* was & in Rust */"
+            };
+
+            // Create a template literal to combine the expression with the comment
+            Ok(state
+                .mk_template_literal(vec!["".to_string(), comment.to_string()], vec![inner_expr]))
+        }
+    }
 }
 
 /// Convert Rust block to JavaScript (old API)
