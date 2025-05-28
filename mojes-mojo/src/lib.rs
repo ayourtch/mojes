@@ -1361,6 +1361,7 @@ pub fn generate_js_class_for_struct(input_struct: &ItemStruct) -> Result<js::Mod
                 decorators: vec![],
                 accessibility: None,
                 readonly: false,
+                is_override: false,
                 param: js::TsParamPropParam::Ident(match pat {
                     js::Pat::Ident(binding_ident) => binding_ident,
                     _ => js::BindingIdent {
@@ -1429,7 +1430,7 @@ pub fn generate_js_enum(input_enum: &ItemEnum) -> Result<js::ModuleItem, String>
                     },
                 ))));
             }
-            Fields::Unnamed(fields) | Fields::Named(fields) => {
+            Fields::Unnamed(_) | Fields::Named(_) => {
                 // Create factory function for complex variants
                 let param_count = match &variant.fields {
                     Fields::Unnamed(f) => f.unnamed.len(),
