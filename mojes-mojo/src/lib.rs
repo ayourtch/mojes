@@ -290,11 +290,14 @@ impl TranspilerState {
         let quasis: Vec<js::TplElement> = final_parts
             .into_iter()
             .enumerate()
-            .map(|(i, part)| js::TplElement {
-                span: DUMMY_SP,
-                tail: i == parts_len - 1,
-                cooked: Some(part.clone().into()),
-                raw: swc_atoms::Atom::new(part),
+            .map(|(i, part)| {
+                let escaped_part = part.replace('`', "\\`");
+                js::TplElement {
+                    span: DUMMY_SP,
+                    tail: i == parts_len - 1,
+                    cooked: Some(escaped_part.clone().into()),
+                    raw: swc_atoms::Atom::new(escaped_part),
+                }
             })
             .collect();
 
