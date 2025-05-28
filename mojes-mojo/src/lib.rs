@@ -1846,6 +1846,138 @@ fn handle_for_expr(
     Ok(state.mk_iife(vec![for_stmt]))
 }
 
+/// Handle pattern matching and variable binding - shared between match and if-let
+fn handle_pattern_binding(
+    pat: &Pat,
+    match_var: &str,
+    state: &mut TranspilerState,
+) -> Result<(js::Expr, Vec<js::Stmt>), String> {
+    let mut binding_stmts = Vec::new();
+
+    let condition = match pat {
+        Pat::Lit(lit_pat) => {
+            let lit_expr = match &lit_pat.lit {
+                syn::Lit::Str(s) => state.mk_str_lit(&s.value()),
+                syn::Lit::Int(i) => {
+                    let value = i
+                        .base10_parse::<f64>()
+                        .map_err(|e| format!("Failed to parse integer: {}", e))?;
+                    state.mk_num_lit(value)
+                }
+                syn::Lit::Float(f) => {
+                    let value = f
+                        .base10_parse::<f64>()
+                        .map_err(|e| format!("Failed to parse float: {}", e))?;
+                    state.mk_num_lit(value)
+                }
+                syn::Lit::Bool(b) => state.mk_bool_lit(b.value()),
+                syn::Lit::Char(c) => state.mk_str_lit(&c.value().to_string()),
+                _ => return Err("Unsupported literal in pattern".to_string()),
+            };
+
+            state.mk_binary_expr(
+                js::Expr::Ident(state.mk_ident(match_var)),
+                js::BinaryOp::EqEqEq,
+                lit_expr,
+            )
+        }
+        Pat::Wild(_) => {
+            // Wildcard pattern always matches
+            state.mk_bool_lit(true)
+        }
+        Pat::Ident(pat_ident) => {
+            // Variable binding - always matches, and we need to bind the variable
+            let var_name = pat_ident.ident.to_string();
+            let js_var_name = escape_js_identifier(&var_name);
+            state.declare_variable(var_name, js_var_name.clone(), false);
+
+            // Add: const x = _match_value;
+            binding_stmts.push(state.mk_var_decl(
+                &js_var_name,
+                Some(js::Expr::Ident(state.mk_ident(match_var))),
+                true,
+            ));
+
+            state.mk_bool_lit(true)
+        }
+        Pat::Path(path_pat) => {
+            // Handle enum variants like None, Some
+            if let Some(segment) = path_pat.path.segments.last() {
+                let variant_name = segment.ident.to_string();
+                match variant_name.as_str() {
+                    "None" => {
+                        // Check for null or undefined
+                        let null_check = state.mk_binary_expr(
+                            js::Expr::Ident(state.mk_ident(match_var)),
+                            js::BinaryOp::EqEqEq,
+                            state.mk_null_lit(),
+                        );
+                        let undefined_check = state.mk_binary_expr(
+                            js::Expr::Ident(state.mk_ident(match_var)),
+                            js::BinaryOp::EqEqEq,
+                            state.mk_undefined(),
+                        );
+                        state.mk_binary_expr(null_check, js::BinaryOp::LogicalOr, undefined_check)
+                    }
+                    _ => {
+                        // For other enum variants, compare against string
+                        state.mk_binary_expr(
+                            js::Expr::Ident(state.mk_ident(match_var)),
+                            js::BinaryOp::EqEqEq,
+                            state.mk_str_lit(&variant_name),
+                        )
+                    }
+                }
+            } else {
+                return Err("Invalid path pattern".to_string());
+            }
+        }
+        Pat::TupleStruct(tuple_struct) => {
+            // Handle Some(x) patterns
+            if let Some(segment) = tuple_struct.path.segments.last() {
+                if segment.ident == "Some" {
+                    // Check that value is not null/undefined
+                    let not_null = state.mk_binary_expr(
+                        js::Expr::Ident(state.mk_ident(match_var)),
+                        js::BinaryOp::NotEqEq,
+                        state.mk_null_lit(),
+                    );
+                    let not_undefined = state.mk_binary_expr(
+                        js::Expr::Ident(state.mk_ident(match_var)),
+                        js::BinaryOp::NotEqEq,
+                        state.mk_undefined(),
+                    );
+
+                    // If there's a variable binding in the pattern, handle it
+                    if let Some(inner_pat) = tuple_struct.elems.first() {
+                        if let Pat::Ident(pat_ident) = inner_pat {
+                            let var_name = pat_ident.ident.to_string();
+                            let js_var_name = escape_js_identifier(&var_name);
+                            state.declare_variable(var_name, js_var_name.clone(), false);
+
+                            // Add: const x = _match_value;
+                            binding_stmts.push(state.mk_var_decl(
+                                &js_var_name,
+                                Some(js::Expr::Ident(state.mk_ident(match_var))),
+                                true,
+                            ));
+                        }
+                    }
+
+                    state.mk_binary_expr(not_null, js::BinaryOp::LogicalAnd, not_undefined)
+                } else {
+                    return Err("Unsupported tuple struct pattern".to_string());
+                }
+            } else {
+                return Err("Invalid tuple struct pattern".to_string());
+            }
+        }
+        _ => return Err("Unsupported pattern".to_string()),
+    };
+
+    Ok((condition, binding_stmts))
+}
+
 /// Handle match expressions
 fn handle_match_expr(
     match_expr: &syn::ExprMatch,
@@ -1861,16 +1993,18 @@ fn handle_match_expr(
     let mut if_chain: Option<js::Stmt> = None;
 
     for (i, arm) in match_expr.arms.iter().enumerate() {
-        let condition = create_match_condition(&arm.pat, &temp_var, state)?;
+        let (condition, mut binding_stmts) = handle_pattern_binding(&arm.pat, &temp_var, state)?;
         let body_expr = rust_expr_to_js_with_state(&arm.body, state)?;
-        let body_stmt = state.mk_return_stmt(Some(body_expr));
+
+        // Combine binding statements with return statement
+        binding_stmts.push(state.mk_return_stmt(Some(body_expr)));
 
         let current_if = js::Stmt::If(js::IfStmt {
             span: DUMMY_SP,
             test: Box::new(condition),
             cons: Box::new(js::Stmt::Block(js::BlockStmt {
                 span: DUMMY_SP,
-                stmts: vec![body_stmt],
+                stmts: binding_stmts,
                 ctxt: SyntaxContext::empty(),
             })),
             alt: None,
