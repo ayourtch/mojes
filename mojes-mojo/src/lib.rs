@@ -2513,7 +2513,7 @@ fn handle_closure_expr(
         }
     };
 
-    Ok(js::Expr::Arrow(js::ArrowExpr {
+    let arrow_expr = js::Expr::Arrow(js::ArrowExpr {
         span: DUMMY_SP,
         params,
         body: Box::new(body),
@@ -2522,6 +2522,12 @@ fn handle_closure_expr(
         type_params: None,
         return_type: None,
         ctxt: SyntaxContext::empty(),
+    });
+
+    // Wrap the arrow function in parentheses for better readability
+    Ok(js::Expr::Paren(js::ParenExpr {
+        span: DUMMY_SP,
+        expr: Box::new(arrow_expr),
     }))
 }
 
