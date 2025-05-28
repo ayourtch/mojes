@@ -442,14 +442,27 @@ pub fn rust_block_to_js_with_state(
                 js_stmts.push(js_stmt);
             }
             Stmt::Expr(expr, semi) => {
-                let js_expr = rust_expr_to_js_with_state(expr, state)?;
+                match expr {
+                    Expr::Return(ret) => {
+                        // Handle return expressions properly
+                        if let Some(return_expr) = &ret.expr {
+                            let js_expr = rust_expr_to_js_with_state(return_expr, state)?;
+                            js_stmts.push(state.mk_return_stmt(Some(js_expr)));
+                        } else {
+                            js_stmts.push(state.mk_return_stmt(None));
+                        }
+                    }
+                    _ => {
+                        let js_expr = rust_expr_to_js_with_state(expr, state)?;
 
-                if semi.is_some() {
-                    // Expression with semicolon - treat as statement
-                    js_stmts.push(state.mk_expr_stmt(js_expr));
-                } else {
-                    // Expression without semicolon - likely a return expression
-                    js_stmts.push(state.mk_return_stmt(Some(js_expr)));
+                        if semi.is_some() {
+                            // Expression with semicolon - treat as statement
+                            js_stmts.push(state.mk_expr_stmt(js_expr));
+                        } else {
+                            // Expression without semicolon - likely a return expression
+                            js_stmts.push(state.mk_return_stmt(Some(js_expr)));
+                        }
+                    }
                 }
             }
             Stmt::Macro(mac_stmt) => {

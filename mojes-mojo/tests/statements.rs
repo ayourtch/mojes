@@ -97,6 +97,7 @@ fn test_return_statements() {
     };
 
     let js_code = rust_block_to_js(&block);
+    println!("DEBUG test_return_statements js code: {}", &js_code);
     assert!(js_code.contains("return 42;"));
 
     // Return without semicolon (implicit return)
