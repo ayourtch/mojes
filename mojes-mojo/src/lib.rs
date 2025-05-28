@@ -22,6 +22,12 @@ pub struct TranspilerState {
     temp_var_counter: usize,
 }
 
+#[derive(Copy, Eq, PartialEq, Clone, Debug)]
+pub enum BlockAction {
+    Return,
+    NoReturn,
+}
+
 #[derive(Debug, Clone)]
 pub struct SymbolInfo {
     pub js_name: String,
@@ -417,7 +423,7 @@ fn generate_js_method(
         .collect();
 
     // Convert method body to JavaScript
-    let body_stmts = rust_block_to_js_with_state(&method.block, state)?;
+    let body_stmts = rust_block_to_js_with_state(BlockAction::Return, &method.block, state)?;
     let body = js::BlockStmt {
         span: DUMMY_SP,
         stmts: body_stmts,
@@ -463,8 +469,27 @@ fn generate_js_method(
     })))
 }
 
+fn can_be_statement(expr: &Expr) -> bool {
+    matches!(expr, Expr::While(_) | Expr::ForLoop(_) | Expr::Loop(_))
+}
+
+/*
+fn convert_while_to_stmt(
+    while_expr: &syn::ExprWhile,
+    state: &mut TranspilerState,
+) -> Result<js::Stmt, String> {
+}
+fn convert_for_to_stmt(for_expr: &syn::ExprForLoop, state: &mut TranspilerState) -> Result<js::Stmt, String>
+{
+}
+fn convert_loop_to_stmt(loop_expr: &syn::ExprLoop, state: &mut TranspilerState) -> Result<js::Stmt, String>
+{
+}
+*/
+
 /// Convert Rust block to JavaScript statements
 pub fn rust_block_to_js_with_state(
+    block_action: BlockAction,
     block: &Block,
     state: &mut TranspilerState,
 ) -> Result<Vec<js::Stmt>, String> {
@@ -489,6 +514,11 @@ pub fn rust_block_to_js_with_state(
                             js_stmts.push(state.mk_return_stmt(None));
                         }
                     }
+                    Expr::ForLoop(for_expr) => {
+                        // Generate direct statement
+                        let for_stmt = convert_for_to_stmt_enhanced(for_expr, state)?;
+                        js_stmts.push(for_stmt);
+                    }
                     x => {
                         println!("DEBUG EXPR IN BLOCK: {:?}, semi: {:?}", &x, &semi);
                         let js_expr = rust_expr_to_js_with_state(expr, state)?;
@@ -499,7 +529,8 @@ pub fn rust_block_to_js_with_state(
                         } else {
                             // Expression without semicolon - only return if it's the last statement
                             let is_last_stmt = stmt == block.stmts.last().unwrap();
-                            if is_last_stmt {
+                            if is_last_stmt && block_action == BlockAction::Return {
+                                println!("DEBUG BLOCK: return statement: {:?}", block_action);
                                 js_stmts.push(state.mk_return_stmt(Some(js_expr)));
                             } else {
                                 js_stmts.push(state.mk_expr_stmt(js_expr));
@@ -523,8 +554,24 @@ pub fn rust_block_to_js_with_state(
     Ok(js_stmts)
 }
 
-/// Convert Rust expression to JavaScript expression
 pub fn rust_expr_to_js_with_state(
+    expr: &Expr,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    rust_expr_to_js_with_action_and_state(BlockAction::NoReturn, expr, state)
+}
+
+pub fn rust_expr_misc(
+    block_action: BlockAction,
+    expr: &Expr,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    Err("test".to_string())
+}
+
+/// Convert Rust expression to JavaScript expression
+pub fn rust_expr_to_js_with_action_and_state(
+    block_action: BlockAction,
     expr: &Expr,
     state: &mut TranspilerState,
 ) -> Result<js::Expr, String> {
@@ -683,11 +730,12 @@ pub fn rust_expr_to_js_with_state(
         }
 
         // Handle if expressions
-        Expr::If(if_expr) => handle_if_expr(if_expr, state),
+        Expr::If(if_expr) => handle_if_expr(block_action, if_expr, state),
 
         // Handle block expressions
         Expr::Block(block_expr) => {
-            let stmts = rust_block_to_js_with_state(&block_expr.block, state)?;
+            println!("DEBUG EXPR block action: {:?}", block_action);
+            let stmts = rust_block_to_js_with_state(block_action, &block_expr.block, state)?;
             Ok(state.mk_iife(stmts))
         }
 
@@ -821,8 +869,9 @@ pub fn rust_expr_to_js_with_state(
         // Handle additional expression types
         Expr::While(while_expr) => handle_while_expr(while_expr, state),
         Expr::ForLoop(for_expr) => handle_for_expr(for_expr, state),
-        Expr::Match(match_expr) => handle_match_expr(match_expr, state),
         Expr::Loop(loop_expr) => handle_loop_expr(loop_expr, state),
+
+        Expr::Match(match_expr) => handle_match_expr(match_expr, state),
         Expr::Closure(closure) => handle_closure_expr(closure, state),
         Expr::Struct(struct_expr) => handle_struct_expr(struct_expr, state),
         Expr::Range(range_expr) => handle_range_expr(range_expr, state),
@@ -883,7 +932,7 @@ fn handle_async_expr(
     async_expr: &syn::ExprAsync,
     state: &mut TranspilerState,
 ) -> Result<js::Expr, String> {
-    let body_stmts = rust_block_to_js_with_state(&async_expr.block, state)?;
+    let body_stmts = rust_block_to_js_with_state(BlockAction::NoReturn, &async_expr.block, state)?;
 
     let async_fn = js::ArrowExpr {
         span: DUMMY_SP,
@@ -1118,9 +1167,14 @@ fn handle_function_call(
 }
 
 /// Handle if expressions
-fn handle_if_expr(if_expr: &syn::ExprIf, state: &mut TranspilerState) -> Result<js::Expr, String> {
+fn handle_if_expr(
+    block_action: BlockAction,
+    if_expr: &syn::ExprIf,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
     let test = rust_expr_to_js_with_state(&if_expr.cond, state)?;
-    let consequent_stmts = rust_block_to_js_with_state(&if_expr.then_branch, state)?;
+    let consequent_stmts = rust_block_to_js_with_state(block_action, &if_expr.then_branch, state)?;
+    println!("DEBUG IF: {:?}", &block_action);
 
     let mut if_stmts = vec![js::Stmt::If(js::IfStmt {
         span: DUMMY_SP,
@@ -1136,7 +1190,9 @@ fn handle_if_expr(if_expr: &syn::ExprIf, state: &mut TranspilerState) -> Result<
     // Handle else branch
     if let Some((_, else_branch)) = &if_expr.else_branch {
         let else_stmts = match &**else_branch {
-            Expr::Block(else_block) => rust_block_to_js_with_state(&else_block.block, state)?,
+            Expr::Block(else_block) => {
+                rust_block_to_js_with_state(block_action, &else_block.block, state)?
+            }
             Expr::If(_) => {
                 // Handle else if
                 let else_if_expr = rust_expr_to_js_with_state(else_branch, state)?;
@@ -1144,7 +1200,11 @@ fn handle_if_expr(if_expr: &syn::ExprIf, state: &mut TranspilerState) -> Result<
             }
             _ => {
                 let else_expr = rust_expr_to_js_with_state(else_branch, state)?;
-                vec![state.mk_return_stmt(Some(else_expr))]
+                if block_action == BlockAction::Return {
+                    vec![state.mk_return_stmt(Some(else_expr))]
+                } else {
+                    vec![state.mk_expr_stmt(else_expr)]
+                }
             }
         };
 
@@ -1158,8 +1218,10 @@ fn handle_if_expr(if_expr: &syn::ExprIf, state: &mut TranspilerState) -> Result<
         }
     }
 
-    // Add a default return undefined
-    if_stmts.push(state.mk_return_stmt(Some(state.mk_undefined())));
+    // Add a default return undefined if necessary
+    if block_action == BlockAction::Return {
+        if_stmts.push(state.mk_return_stmt(Some(state.mk_undefined())));
+    }
 
     Ok(state.mk_iife(if_stmts))
 }
@@ -2226,7 +2288,7 @@ fn handle_while_expr(
     state: &mut TranspilerState,
 ) -> Result<js::Expr, String> {
     let test = rust_expr_to_js_with_state(&while_expr.cond, state)?;
-    let body_stmts = rust_block_to_js_with_state(&while_expr.body, state)?;
+    let body_stmts = rust_block_to_js_with_state(BlockAction::NoReturn, &while_expr.body, state)?;
 
     let while_stmt = js::Stmt::While(js::WhileStmt {
         span: DUMMY_SP,
@@ -2241,16 +2303,16 @@ fn handle_while_expr(
     Ok(state.mk_iife(vec![while_stmt]))
 }
 
-/// Handle for loops
-fn handle_for_expr(
+/// Core function that converts Rust for loop to JavaScript for-of statement
+fn convert_for_to_stmt(
     for_expr: &syn::ExprForLoop,
     state: &mut TranspilerState,
-) -> Result<js::Expr, String> {
+) -> Result<js::Stmt, String> {
     // Convert the iterable expression
     let iterable = rust_expr_to_js_with_state(&for_expr.expr, state)?;
 
     // Convert loop body
-    let body_stmts = rust_block_to_js_with_state(&for_expr.body, state)?;
+    let body_stmts = rust_block_to_js_with_state(BlockAction::NoReturn, &for_expr.body, state)?;
 
     match &*for_expr.pat {
         Pat::Ident(pat_ident) => {
@@ -2258,8 +2320,11 @@ fn handle_for_expr(
             let loop_var = pat_ident.ident.to_string();
             let js_loop_var = escape_js_identifier(&loop_var);
 
+            // Declare the variable in the current scope
+            state.declare_variable(loop_var, js_loop_var.clone(), false);
+
             // Create for...of loop
-            let for_stmt = js::Stmt::ForOf(js::ForOfStmt {
+            Ok(js::Stmt::ForOf(js::ForOfStmt {
                 span: DUMMY_SP,
                 is_await: false,
                 left: js::ForHead::VarDecl(Box::new(js::VarDecl {
@@ -2283,9 +2348,7 @@ fn handle_for_expr(
                     stmts: body_stmts,
                     ctxt: SyntaxContext::empty(),
                 })),
-            });
-
-            Ok(state.mk_iife(vec![for_stmt]))
+            }))
         }
 
         Pat::Tuple(tuple_pat) => {
@@ -2325,7 +2388,7 @@ fn handle_for_expr(
             });
 
             // Create for...of loop with destructuring
-            let for_stmt = js::Stmt::ForOf(js::ForOfStmt {
+            Ok(js::Stmt::ForOf(js::ForOfStmt {
                 span: DUMMY_SP,
                 is_await: false,
                 left: js::ForHead::VarDecl(Box::new(js::VarDecl {
@@ -2346,9 +2409,7 @@ fn handle_for_expr(
                     stmts: body_stmts,
                     ctxt: SyntaxContext::empty(),
                 })),
-            });
-
-            Ok(state.mk_iife(vec![for_stmt]))
+            }))
         }
 
         Pat::Type(type_pat) => {
@@ -2363,12 +2424,145 @@ fn handle_for_expr(
                 expr: for_expr.expr.clone(),
                 body: for_expr.body.clone(),
             };
-            handle_for_expr(&inner_for_expr, state)
+            convert_for_to_stmt(&inner_for_expr, state)
         }
 
-        _ => Err(format!("Unsupported for loop pattern {:?}", &*for_expr.pat)),
+        _ => panic!("Unsupported for loop pattern {:?}", &*for_expr.pat),
     }
 }
+
+fn handle_for_expr(
+    for_expr: &syn::ExprForLoop,
+    state: &mut TranspilerState,
+) -> Result<js::Expr, String> {
+    // Reuse the statement converter and wrap in IIFE
+    let for_stmt = convert_for_to_stmt(for_expr, state)?;
+    Ok(state.mk_iife(vec![for_stmt]))
+}
+
+/// Enhanced version that detects enumerate patterns and generates optimized JavaScript
+fn convert_for_to_stmt_enhanced(
+    for_expr: &syn::ExprForLoop,
+    state: &mut TranspilerState,
+) -> Result<js::Stmt, String> {
+    // Check for enumerate pattern first
+    if let (Pat::Tuple(tuple_pat), Some(collection_expr)) =
+        (&*for_expr.pat, detect_enumerate_pattern(&for_expr.expr))
+    {
+        if tuple_pat.elems.len() == 2 {
+            let index_var = if let Pat::Ident(ref pat_ident) = tuple_pat.elems[0] {
+                pat_ident.ident.to_string()
+            } else {
+                "i".to_string()
+            };
+
+            let item_var = if let Pat::Ident(ref pat_ident) = tuple_pat.elems[1] {
+                pat_ident.ident.to_string()
+            } else {
+                "item".to_string()
+            };
+
+            let js_index_var = escape_js_identifier(&index_var);
+            let js_item_var = escape_js_identifier(&item_var);
+
+            // Declare variables
+            state.declare_variable(index_var, js_index_var.clone(), false);
+            state.declare_variable(item_var, js_item_var.clone(), false);
+
+            let iterable = rust_expr_to_js_with_state(&collection_expr, state)?;
+            let body_stmts = rust_block_to_js_with_state(BlockAction::NoReturn, &for_expr.body, state)?;
+
+            // Generate: let i = 0; for (const item of collection) { body; i++; }
+            let mut stmts = vec![
+                // let i = 0;
+                state.mk_var_decl(&js_index_var, Some(state.mk_num_lit(0.0)), false),
+                // for (const item of collection) { body; i++; }
+                js::Stmt::ForOf(js::ForOfStmt {
+                    span: DUMMY_SP,
+                    is_await: false,
+                    left: js::ForHead::VarDecl(Box::new(js::VarDecl {
+                        span: DUMMY_SP,
+                        kind: js::VarDeclKind::Const,
+                        declare: false,
+                        decls: vec![js::VarDeclarator {
+                            span: DUMMY_SP,
+                            name: js::Pat::Ident(js::BindingIdent {
+                                id: state.mk_ident(&js_item_var),
+                                type_ann: None,
+                            }),
+                            init: None,
+                            definite: false,
+                        }],
+                        ctxt: SyntaxContext::empty(),
+                    })),
+                    right: Box::new(iterable),
+                    body: Box::new(js::Stmt::Block(js::BlockStmt {
+                        span: DUMMY_SP,
+                        stmts: {
+                            let mut loop_stmts = body_stmts;
+                            // Add i++ at the end
+                            loop_stmts.push(state.mk_expr_stmt(js::Expr::Update(js::UpdateExpr {
+                                span: DUMMY_SP,
+                                op: js::UpdateOp::PlusPlus,
+                                prefix: false,
+                                arg: Box::new(js::Expr::Ident(state.mk_ident(&js_index_var))),
+                            })));
+                            loop_stmts
+                        },
+                        ctxt: SyntaxContext::empty(),
+                    })),
+                }),
+            ];
+
+            // Return a block statement containing both statements
+            return Ok(js::Stmt::Block(js::BlockStmt {
+                span: DUMMY_SP,
+                stmts,
+                ctxt: SyntaxContext::empty(),
+            }));
+        }
+    }
+
+    // Fall back to regular for loop handling
+    convert_for_to_stmt(for_expr, state)
+}
+
+/// Helper function to detect enumerate patterns
+fn detect_enumerate_pattern(expr: &Expr) -> Option<Expr> {
+    if let Expr::MethodCall(method_call) = expr {
+        if method_call.method == "enumerate" {
+            // Check if the receiver is a .iter() call
+            if let Expr::MethodCall(iter_call) = &*method_call.receiver {
+                if iter_call.method == "iter" {
+                    return Some((*iter_call.receiver).clone());
+                }
+            }
+            // Could also be direct enumerate on collection
+            return Some((*method_call.receiver).clone());
+        }
+    }
+    None
+}
+
+/// Context-aware wrapper that chooses between statement and expression handling
+pub fn handle_for_context_aware(
+    for_expr: &syn::ExprForLoop,
+    state: &mut TranspilerState,
+    in_statement_context: bool,
+) -> Result<Either<js::Stmt, js::Expr>, String> {
+    if in_statement_context {
+        convert_for_to_stmt_enhanced(for_expr, state).map(Either::Left)
+    } else {
+        handle_for_expr(for_expr, state).map(Either::Right)
+    }
+}
+
+// Helper enum for returning either statement or expression
+pub enum Either<L, R> {
+    Left(L),
+    Right(R),
+}
+
 /// Handle pattern matching and variable binding - shared between match and if-let
 fn handle_pattern_binding(
     pat: &Pat,
@@ -2695,7 +2889,7 @@ fn handle_loop_expr(
     loop_expr: &syn::ExprLoop,
     state: &mut TranspilerState,
 ) -> Result<js::Expr, String> {
-    let body_stmts = rust_block_to_js_with_state(&loop_expr.body, state)?;
+    let body_stmts = rust_block_to_js_with_state(BlockAction::NoReturn, &loop_expr.body, state)?;
 
     let while_stmt = js::Stmt::While(js::WhileStmt {
         span: DUMMY_SP,
@@ -2734,7 +2928,7 @@ fn handle_closure_expr(
     // Handle closure body
     let body = match &*closure.body {
         Expr::Block(block_expr) => {
-            let stmts = rust_block_to_js_with_state(&block_expr.block, state)?;
+            let stmts = rust_block_to_js_with_state(BlockAction::Return, &block_expr.block, state)?;
             js::BlockStmtOrExpr::BlockStmt(js::BlockStmt {
                 span: DUMMY_SP,
                 stmts,
@@ -3072,7 +3266,7 @@ fn handle_reference_expr(
 pub fn rust_block_to_js(block: &Block) -> String {
     let mut state = TranspilerState::new();
 
-    let stmts = rust_block_to_js_with_state(block, &mut state)
+    let stmts = rust_block_to_js_with_state(BlockAction::NoReturn, block, &mut state)
         .expect("Failed to convert Rust block to JavaScript");
 
     let module_items: Vec<js::ModuleItem> = stmts
