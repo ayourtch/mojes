@@ -1000,6 +1000,7 @@ pub fn rust_expr_to_js_with_action_and_state(
     expr: &Expr,
     state: &mut TranspilerState,
 ) -> Result<js::Expr, String> {
+    println!("DEBUG EXPR: {:?}, {:?}", block_action, &expr);
     match expr {
         // Handle literals
         Expr::Lit(lit) => match &lit.lit {
@@ -1530,7 +1531,7 @@ fn handle_function_call(
     call: &syn::ExprCall,
     state: &mut TranspilerState,
 ) -> Result<js::Expr, String> {
-    // Convert arguments
+    // Convert arguments first
     let args: Result<Vec<_>, _> = call
         .args
         .iter()
@@ -1538,12 +1539,42 @@ fn handle_function_call(
         .collect();
     let js_args = args?;
 
-    // Handle the function being called
     match &*call.func {
         Expr::Path(path) => {
-            if let Some(last_segment) = path.path.segments.last() {
-                // Continuation of handle_function_call and other helper functions
+            // Check if this is a Type::method pattern
+            if path.path.segments.len() >= 2 {
+                let type_name = path.path.segments[path.path.segments.len() - 2]
+                    .ident
+                    .to_string();
+                let method_name = path.path.segments.last().unwrap().ident.to_string();
 
+                // Handle constructor calls (Type::new)
+                if method_name == "new" {
+                    return Ok(js::Expr::New(js::NewExpr {
+                        span: DUMMY_SP,
+                        callee: Box::new(js::Expr::Ident(state.mk_ident(&type_name))),
+                        args: Some(
+                            js_args
+                                .into_iter()
+                                .map(|expr| js::ExprOrSpread {
+                                    spread: None,
+                                    expr: Box::new(expr),
+                                })
+                                .collect(),
+                        ),
+                        type_args: None,
+                        ctxt: SyntaxContext::empty(),
+                    }));
+                }
+
+                // Handle other static methods (Type::method)
+                let static_method =
+                    state.mk_member_expr(js::Expr::Ident(state.mk_ident(&type_name)), &method_name);
+                return Ok(state.mk_call_expr(static_method, js_args));
+            }
+
+            // Single segment path (regular function call)
+            if let Some(last_segment) = path.path.segments.last() {
                 let func_name = last_segment.ident.to_string();
 
                 match func_name.as_str() {
@@ -1551,16 +1582,6 @@ fn handle_function_call(
                         let console_log =
                             state.mk_member_expr(js::Expr::Ident(state.mk_ident("console")), "log");
                         Ok(state.mk_call_expr(console_log, js_args))
-                    }
-                    "eprintln" | "eprint" => {
-                        let console_error = state
-                            .mk_member_expr(js::Expr::Ident(state.mk_ident("console")), "error");
-                        Ok(state.mk_call_expr(console_error, js_args))
-                    }
-                    "format" => {
-                        // Handle format! macro as function call
-                        panic!("NEVER CALLED?");
-                        handle_format_macro_with_state(&call.args, state)
                     }
                     "Some" => {
                         // Option::Some just returns the value in JavaScript

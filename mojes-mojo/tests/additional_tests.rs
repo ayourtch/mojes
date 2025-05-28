@@ -23,6 +23,13 @@ fn test_assign_op() {
 }
 
 #[test]
+fn test_new_object() {
+    let expr: Expr = parse_quote!(FooBar::new(FooBar::new()));
+    let js_code = rust_expr_to_js(&expr);
+    assert_eq!(js_code, "new FooBar(new FooBar())");
+}
+
+#[test]
 fn test_current_string_escaping_behavior() {
     let expr: Expr = parse_quote!("Line 1\nLine 2\tTabbed\rCarriage\"Quote");
     let js_code = rust_expr_to_js(&expr);
