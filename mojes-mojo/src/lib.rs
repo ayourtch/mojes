@@ -1602,10 +1602,22 @@ pub fn generate_js_enum_with_state(input_enum: &ItemEnum) -> Result<js::ModuleIt
                     _ => 0,
                 };
 
+                let field_names: Vec<String> = match &variant.fields {
+                    Fields::Unnamed(fields) => (0..fields.unnamed.len())
+                        .map(|i| format!("value{}", i))
+                        .collect(),
+                    Fields::Named(fields) => fields
+                        .named
+                        .iter()
+                        .filter_map(|field| field.ident.as_ref().map(|ident| ident.to_string()))
+                        .collect(),
+                    _ => vec![],
+                };
+
                 let params: Vec<js::Pat> = (0..param_count)
                     .map(|i| {
                         js::Pat::Ident(js::BindingIdent {
-                            id: state.mk_ident(&format!("value{}", i)),
+                            id: state.mk_ident(&field_names[i]),
                             type_ann: None,
                         })
                     })
@@ -1622,10 +1634,8 @@ pub fn generate_js_enum_with_state(input_enum: &ItemEnum) -> Result<js::ModuleIt
                 for i in 0..param_count {
                     obj_props.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
                         js::KeyValueProp {
-                            key: js::PropName::Ident(state.mk_ident_name(&format!("value{}", i))),
-                            value: Box::new(js::Expr::Ident(
-                                state.mk_ident(&format!("value{}", i)),
-                            )),
+                            key: js::PropName::Ident(state.mk_ident_name(&field_names[i])),
+                            value: Box::new(js::Expr::Ident(state.mk_ident(&field_names[i]))),
                         },
                     ))));
                 }
