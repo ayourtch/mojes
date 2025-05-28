@@ -780,35 +780,8 @@ pub fn rust_expr_to_js_with_state(
             }
         }
 
-        _ => {
-            panic!("Unsupported expression type: {:?}", expr);
-        }
-    }
-}
-
-/// Complete the rust_expr_to_js_with_state function with remaining expression types
-pub fn rust_expr_to_js_with_state_complete(
-    expr: &Expr,
-    state: &mut TranspilerState,
-) -> Result<js::Expr, String> {
-    match expr {
-        // Handle the patterns we already covered in the main function
-        Expr::Lit(_)
-        | Expr::Path(_)
-        | Expr::Binary(_)
-        | Expr::Unary(_)
-        | Expr::MethodCall(_)
-        | Expr::Call(_)
-        | Expr::Field(_)
-        | Expr::If(_)
-        | Expr::Block(_)
-        | Expr::Array(_)
-        | Expr::Index(_)
-        | Expr::Assign(_)
-        | Expr::Return(_)
-        | Expr::Macro(_) => rust_expr_to_js_with_state(expr, state),
-
         // Handle additional expression types
+
         Expr::While(while_expr) => handle_while_expr(while_expr, state),
         Expr::ForLoop(for_expr) => handle_for_expr(for_expr, state),
         Expr::Match(match_expr) => handle_match_expr(match_expr, state),
