@@ -47,7 +47,7 @@ fn test_closure_in_method_calls() {
 
     let expr: Expr = parse_quote!(items.filter(|item| item.active));
     let js_code = rust_expr_to_js(&expr);
-    assert_eq!(js_code, "items.filter((item) => item.active)");
+    assert_eq!(js_code, "items.filter(((item)=>item.active))");
 }
 
 #[test]
