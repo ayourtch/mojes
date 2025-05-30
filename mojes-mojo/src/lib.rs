@@ -1567,7 +1567,6 @@ pub fn rust_expr_to_js_with_action_and_state(
 
         Expr::Try(try_expr) => {
             let inner = rust_expr_to_js_with_action_and_state(block_action, &try_expr.expr, state)?;
-
             // Generate an IIFE that handles the try operation
             let temp_var = state.generate_temp_var();
 
@@ -1578,37 +1577,33 @@ pub fn rust_expr_to_js_with_action_and_state(
                 js::Stmt::If(js::IfStmt {
                     span: DUMMY_SP,
                     test: Box::new(state.mk_binary_expr(
-                        state.mk_binary_expr(
-                            js::Expr::Ident(state.mk_ident(&temp_var)),
-                            js::BinaryOp::LogicalAnd,
-                            state.mk_member_expr(
-                                js::Expr::Ident(state.mk_ident(&temp_var)),
-                                "error",
-                            ),
-                        ),
-                        js::BinaryOp::LogicalOr,
-                        state.mk_binary_expr(
-                            js::Expr::Ident(state.mk_ident(&temp_var)),
-                            js::BinaryOp::EqEqEq,
-                            state.mk_null_lit(),
-                        ),
+                        js::Expr::Ident(state.mk_ident(&temp_var)),
+                        js::BinaryOp::LogicalAnd,
+                        js::Expr::Member(js::MemberExpr {
+                            span: DUMMY_SP,
+                            obj: Box::new(js::Expr::Ident(state.mk_ident(&temp_var))),
+                            prop: js::MemberProp::Ident(state.mk_ident_name("error")),
+                        }),
                     )),
-                    cons: Box::new(
-                        state.mk_return_stmt(Some(js::Expr::Ident(state.mk_ident(&temp_var)))),
-                    ),
+                    cons: Box::new(js::Stmt::Return(js::ReturnStmt {
+                        span: DUMMY_SP,
+                        arg: Some(Box::new(js::Expr::Ident(state.mk_ident(&temp_var)))),
+                    })),
                     alt: None,
                 }),
-                // return _temp1.ok || _temp1;  (unwrap the success value)
-                state.mk_return_stmt(Some(state.mk_binary_expr(
-                    state.mk_member_expr(js::Expr::Ident(state.mk_ident(&temp_var)), "ok"),
-                    js::BinaryOp::LogicalOr,
-                    js::Expr::Ident(state.mk_ident(&temp_var)),
-                ))),
+                // return _temp1.ok;  (unwrap the success value)
+                js::Stmt::Return(js::ReturnStmt {
+                    span: DUMMY_SP,
+                    arg: Some(Box::new(js::Expr::Member(js::MemberExpr {
+                        span: DUMMY_SP,
+                        obj: Box::new(js::Expr::Ident(state.mk_ident(&temp_var))),
+                        prop: js::MemberProp::Ident(state.mk_ident_name("ok")),
+                    }))),
+                }),
             ];
 
             Ok(state.mk_iife(stmts))
         }
-
         _ => {
             state.add_warning(format!("Unsupported expression type: {:?}", expr));
             panic!("Unsupported expression type: {:?}", expr);
@@ -1853,6 +1848,44 @@ fn handle_function_call(
                         } else {
                             Err(format!(
                                 "Some() expects exactly one argument, got {}",
+                                js_args.len()
+                            ))
+                        }
+                    }
+                    "Ok" => {
+                        // Ok(value) -> { ok: value }
+                        if js_args.len() == 1 {
+                            Ok(js::Expr::Object(js::ObjectLit {
+                                span: DUMMY_SP,
+                                props: vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+                                    js::KeyValueProp {
+                                        key: js::PropName::Ident(state.mk_ident_name("ok")),
+                                        value: Box::new(js_args.into_iter().next().unwrap()),
+                                    },
+                                )))],
+                            }))
+                        } else {
+                            Err(format!(
+                                "Ok() expects exactly one argument, got {}",
+                                js_args.len()
+                            ))
+                        }
+                    }
+                    "Err" => {
+                        // Err(error) -> { error: error }
+                        if js_args.len() == 1 {
+                            Ok(js::Expr::Object(js::ObjectLit {
+                                span: DUMMY_SP,
+                                props: vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+                                    js::KeyValueProp {
+                                        key: js::PropName::Ident(state.mk_ident_name("error")),
+                                        value: Box::new(js_args.into_iter().next().unwrap()),
+                                    },
+                                )))],
+                            }))
+                        } else {
+                            Err(format!(
+                                "Err() expects exactly one argument, got {}",
                                 js_args.len()
                             ))
                         }

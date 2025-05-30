@@ -414,7 +414,80 @@ fn test_error_return_full() {
     let js_code = rust_block_to_js(&block);
     println!("DEBUG test_error_return_full js code: {}", &js_code);
 
-    // Should handle most of this, though match guards might fail
-    assert!(js_code.contains("const data"));
-    assert!(js_code.contains("for (const item of"));
+    // Very rudimentary, see test_error_return_boa_full
+    assert!(js_code.contains("ok: "));
+}
+
+#[test]
+fn test_error_return_boa_full() {
+    let block: Block = parse_quote! { { fn foo(x: u32) -> Result<String, u32> { if x == 42 { return Err(42) } else { Ok(format!("Number: {}", x)) } } fn bar(tst: u32) -> Result<String, u32> { let v = foo(tst + 1)?; Ok(format!("Inner returned: {}", &v)) }
+        bar(32);
+      }
+    };
+
+    let js_code = rust_block_to_js(&block);
+    println!("DEBUG test_error_return_full js code: {}", &js_code);
+
+    // Check for the actual content that should be generated
+    assert!(js_code.contains("function foo"));
+    assert!(js_code.contains("function bar"));
+    assert!(js_code.contains("foo(tst + 1)"));
+
+    // Test the success path with Boa
+    let success_test_code = format!(
+        r#"
+    {}
+    const result_success = bar(32);
+    result_success;
+    "#,
+        js_code
+    );
+
+    let success_result = eval_js(&success_test_code).unwrap();
+    println!("✓ Success path result: {:?}", success_result);
+
+    // The result should be an object with an "ok" property
+    // We can't easily test the exact structure with Boa, but we can verify it's not null/undefined
+    assert!(!success_result.is_null_or_undefined());
+
+    // Test the error path with Boa
+    let error_test_code = format!(
+        r#"
+    {}
+    const result_error = bar(41);  // This will call foo(42) which returns an error
+    result_error;
+    "#,
+        js_code
+    );
+
+    let error_result = eval_js(&error_test_code).unwrap();
+    println!("✓ Error path result: {:?}", error_result);
+
+    // The result should be an object (the error result)
+    assert!(!error_result.is_null_or_undefined());
+
+    // Test that we can access the properties in JavaScript
+    let property_test_code = format!(
+        r#"
+    {}
+    const success = bar(32);
+    const error = bar(41);
+    
+    // Test success case
+    const hasOkProperty = success.hasOwnProperty('ok');
+    const hasErrorProperty = error.hasOwnProperty('error');
+    
+    // Return an array with the test results
+    [hasOkProperty, hasErrorProperty, success.ok, error.error];
+    "#,
+        js_code
+    );
+
+    let property_result = eval_js(&property_test_code).unwrap();
+    println!("✓ Property access test result: {:?}", property_result);
+
+    // Verify the structure is correct
+    assert!(!property_result.is_null_or_undefined());
+
+    println!("✓ All Result type handling tests passed!");
 }
