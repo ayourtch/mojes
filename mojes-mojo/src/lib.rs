@@ -3772,13 +3772,21 @@ fn handle_closure_expr(
         .inputs
         .iter()
         .filter_map(|param| {
-            if let Pat::Ident(pat_ident) = param {
-                Some(js::Pat::Ident(js::BindingIdent {
+            match param {
+                Pat::Ident(pat_ident) => Some(js::Pat::Ident(js::BindingIdent {
                     id: state.mk_ident(&pat_ident.ident.to_string()),
                     type_ann: None,
-                }))
-            } else {
-                None
+                })),
+                Pat::Reference(ref_pat) => {
+                    // Handle reference patterns like &x, &&x
+                    extract_ident_from_pattern(&ref_pat.pat).map(|ident| {
+                        js::Pat::Ident(js::BindingIdent {
+                            id: state.mk_ident(&ident),
+                            type_ann: None,
+                        })
+                    })
+                }
+                _ => None,
             }
         })
         .collect();
@@ -3815,6 +3823,15 @@ fn handle_closure_expr(
         span: DUMMY_SP,
         expr: Box::new(arrow_expr),
     }))
+}
+
+// Helper function to recursively extract identifier from nested reference patterns
+fn extract_ident_from_pattern(pat: &Pat) -> Option<String> {
+    match pat {
+        Pat::Ident(pat_ident) => Some(pat_ident.ident.to_string()),
+        Pat::Reference(ref_pat) => extract_ident_from_pattern(&ref_pat.pat),
+        _ => None,
+    }
 }
 
 /// Handle struct literal expressions
