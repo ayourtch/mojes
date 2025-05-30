@@ -1456,6 +1456,31 @@ pub fn rust_expr_to_js_with_action_and_state(
             Ok(state.mk_call_expr(array_from, vec![length_obj, js::Expr::Arrow(arrow_fn)]))
         }
 
+        // Handle verbatim expressions (unparseable token streams)
+        Expr::Verbatim(verbatim) => {
+            // Verbatim expressions are token streams that syn couldn't parse
+            // Often these are empty or contain syntax that doesn't translate well
+            let token_string = verbatim.to_string();
+
+            if token_string.trim().is_empty() {
+                // Empty verbatim expression - return undefined
+                Ok(state.mk_undefined())
+            } else {
+                // Non-empty verbatim - add warning and return comment
+                state.add_warning(format!(
+                    "Verbatim expression not fully supported: {}",
+                    token_string
+                ));
+
+                // Return as a comment expression
+                Ok(js::Expr::Ident(js::Ident::new(
+                    format!("/* verbatim: {} */", token_string.trim()).into(),
+                    DUMMY_SP,
+                    SyntaxContext::empty(),
+                )))
+            }
+        }
+
         _ => {
             state.add_warning(format!("Unsupported expression type: {:?}", expr));
             panic!("Unsupported expression type: {:?}", expr);
