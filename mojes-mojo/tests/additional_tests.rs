@@ -650,7 +650,7 @@ fn test_complex_field_access() {
     // Tuple struct field access (by index)
     let expr: Expr = parse_quote!(point.0);
     let js_code = rust_expr_to_js(&expr);
-    assert_eq!(js_code, "point.0");
+    assert_eq!(js_code, "point[0]");
 }
 
 // ==================== COMPLEX STRUCT INSTANTIATION ====================
