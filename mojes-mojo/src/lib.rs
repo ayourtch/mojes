@@ -1346,6 +1346,53 @@ pub fn rust_expr_to_js_with_action_and_state(
 
         Expr::Paren(paren) => handle_paren_expr(paren, state),
 
+// Handle cast expressions
+Expr::Cast(cast_expr) => {
+    let inner_expr = rust_expr_to_js_with_state(&cast_expr.expr, state)?;
+    
+    // Convert the target type to determine cast function
+    let cast_fn = match &*cast_expr.ty {
+        Type::Path(type_path) => {
+            if let Some(segment) = type_path.path.segments.last() {
+                match segment.ident.to_string().as_str() {
+                    "i8" | "i16" | "i32" | "i64" | "isize" | 
+                    "u8" | "u16" | "u32" | "u64" | "usize" |
+                    "f32" | "f64" => "Number",
+                    "String" | "str" => "String", 
+                    "bool" => "Boolean",
+                    _ => {
+                        // For unknown types, add a comment
+                        return Ok(js::Expr::Ident(js::Ident::new(
+                            format!("{} /* was {} as {} in Rust */", 
+                                match ast_to_code_trimmed(&[js::ModuleItem::Stmt(js::Stmt::Expr(js::ExprStmt {
+                                    span: DUMMY_SP,
+                                    expr: Box::new(inner_expr.clone()),
+                                }))]) {
+                                    Ok(code) => code.trim_end_matches(';').trim().to_string(),
+                                    Err(_) => "expr".to_string(),
+                                },
+                                "expr",
+                                format_rust_type(&cast_expr.ty)
+                            ).into(),
+                            DUMMY_SP,
+                            SyntaxContext::empty(),
+                        )));
+                    }
+                }
+            } else {
+                "Object"
+            }
+        }
+        _ => "Object"
+    };
+    
+    // Create cast function call like Number(expr)
+    Ok(state.mk_call_expr(
+        js::Expr::Ident(state.mk_ident(cast_fn)),
+        vec![inner_expr]
+    ))
+},
+
         _ => {
             state.add_warning(format!("Unsupported expression type: {:?}", expr));
             panic!("Unsupported expression type: {:?}", expr);
