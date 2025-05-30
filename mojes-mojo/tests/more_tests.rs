@@ -114,16 +114,20 @@ fn test_unary_dereference() {
 #[test]
 fn test_tuple_field_access() {
     let expr: Expr = parse_quote!(point.0);
-    let js_code = rust_expr_to_js(&expr);
-    assert_eq!(js_code, "point.0");
+    let js_code1 = rust_expr_to_js(&expr);
 
     let expr: Expr = parse_quote!(tuple.1);
-    let js_code = rust_expr_to_js(&expr);
-    assert_eq!(js_code, "tuple.1");
+    let js_code2 = rust_expr_to_js(&expr);
 
     let expr: Expr = parse_quote!(nested.0.1);
-    let js_code = rust_expr_to_js(&expr);
-    assert_eq!(js_code, "nested.0.1");
+    let js_code3 = rust_expr_to_js(&expr);
+
+    println!("DEBUG test_tuple_field_access js code 1: {}", js_code1);
+    println!("DEBUG test_tuple_field_access js code 2: {}", js_code2);
+    println!("DEBUG test_tuple_field_access js code 3: {}", js_code3);
+    assert_eq!(js_code1, "point[0]");
+    assert_eq!(js_code2, "tuple[1]");
+    assert_eq!(js_code3, "nested[0][1]");
 }
 
 // ==================== 6. VECTOR METHODS WITH ARGUMENTS ====================
@@ -624,7 +628,7 @@ fn test_comprehensive_uncovered_execution_2() {
 
     // Should contain all the uncovered patterns
     assert!(js_code.contains("+=")); // Compound assignment
-    assert!(js_code.contains(".0")); // Tuple access  
+    assert!(js_code.contains("coords[0]")); // Tuple access should translate to array
     assert!(js_code.contains("function()")); // Nested block
     assert!(js_code.contains("let final_value;")); // Uninitialized
     assert!(js_code.contains("final_value = result")); // Later assignment

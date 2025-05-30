@@ -1150,12 +1150,26 @@ pub fn rust_expr_to_js_with_action_and_state(
         // Handle field access
         Expr::Field(field) => {
             let base = rust_expr_to_js_with_state(&field.base, state)?;
-            let member_name = match &field.member {
-                syn::Member::Named(ident) => ident.to_string(),
-                syn::Member::Unnamed(index) => index.index.to_string(),
-            };
 
-            Ok(state.mk_member_expr(base, &member_name))
+            match &field.member {
+                syn::Member::Named(ident) => {
+                    // Named field access: obj.field
+                    let member_name = ident.to_string();
+                    Ok(state.mk_member_expr(base, &member_name))
+                }
+                syn::Member::Unnamed(index) => {
+                    // Tuple field access: obj[0]
+                    let index_expr = state.mk_num_lit(index.index as f64);
+                    Ok(js::Expr::Member(js::MemberExpr {
+                        span: DUMMY_SP,
+                        obj: Box::new(base),
+                        prop: js::MemberProp::Computed(js::ComputedPropName {
+                            span: DUMMY_SP,
+                            expr: Box::new(index_expr),
+                        }),
+                    }))
+                }
+            }
         }
 
         // Handle if expressions
