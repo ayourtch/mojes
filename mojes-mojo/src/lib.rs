@@ -928,6 +928,24 @@ pub fn rust_block_to_js_with_state(
                 let js_stmt = handle_local_statement(block_action, local, state)?;
                 js_stmts.push(js_stmt);
             }
+            Stmt::Item(item) => match item {
+                syn::Item::Fn(item_fn) => {
+                    let js_stmt = handle_function_definition(item_fn, state)?;
+                    js_stmts.push(js_stmt);
+                }
+                syn::Item::Struct(item_struct) => {
+                    panic!(
+                        "Struct definitions in blocks not fully supported: {:?}",
+                        item
+                    );
+                }
+                syn::Item::Enum(item_enum) => {
+                    panic!("Enum definitions in blocks not fully supported: {:?}", item);
+                }
+                _ => {
+                    panic!("Unsupported item type in block: {:?}", item);
+                }
+            },
             Stmt::Expr(expr, semi) => {
                 match expr {
                     Expr::Return(ret) => {
@@ -992,6 +1010,72 @@ pub fn rust_block_to_js_with_state(
 
     state.exit_scope();
     Ok(js_stmts)
+}
+
+/// Handle function definitions inside blocks
+fn handle_function_definition(
+    item_fn: &syn::ItemFn,
+    state: &mut TranspilerState,
+) -> Result<js::Stmt, String> {
+    let func_name = item_fn.sig.ident.to_string();
+    let js_func_name = escape_js_identifier(&func_name);
+
+    // Convert parameters
+    let params: Vec<js::Pat> = item_fn
+        .sig
+        .inputs
+        .iter()
+        .filter_map(|arg| {
+            match arg {
+                syn::FnArg::Receiver(_) => None, // Skip self parameters in nested functions
+                syn::FnArg::Typed(pat_type) => {
+                    if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
+                        let param_name = pat_ident.ident.to_string();
+                        let js_param_name = escape_js_identifier(&param_name);
+                        Some(js::Pat::Ident(js::BindingIdent {
+                            id: state.mk_ident(&js_param_name),
+                            type_ann: None,
+                        }))
+                    } else {
+                        None
+                    }
+                }
+            }
+        })
+        .collect();
+
+    // Convert function body
+    let body_stmts = rust_block_to_js_with_state(BlockAction::Return, &item_fn.block, state)?;
+
+    let function_body = js::BlockStmt {
+        span: DUMMY_SP,
+        stmts: body_stmts,
+        ctxt: SyntaxContext::empty(),
+    };
+
+    let function = js::Function {
+        params: params.into_iter().map(|p| state.pat_to_param(p)).collect(),
+        decorators: vec![],
+        span: DUMMY_SP,
+        body: Some(function_body),
+        is_generator: false,
+        is_async: false,
+        type_params: None,
+        return_type: None,
+        ctxt: SyntaxContext::empty(),
+    };
+
+    // Create function declaration
+    let func_decl = js::FnDecl {
+        ident: state.mk_ident(&js_func_name),
+        declare: false,
+        function: Box::new(function),
+    };
+
+    // Declare the function in the current scope
+    state.declare_variable(func_name, js_func_name, false);
+
+    Ok(js::Stmt::Decl(js::Decl::Fn(func_decl)))
 }
 
 pub fn rust_expr_to_js_with_state(
@@ -1479,6 +1563,50 @@ pub fn rust_expr_to_js_with_action_and_state(
                     SyntaxContext::empty(),
                 )))
             }
+        }
+
+        Expr::Try(try_expr) => {
+            let inner = rust_expr_to_js_with_action_and_state(block_action, &try_expr.expr, state)?;
+
+            // Generate an IIFE that handles the try operation
+            let temp_var = state.generate_temp_var();
+
+            let stmts = vec![
+                // const _temp1 = some_function();
+                state.mk_var_decl(&temp_var, Some(inner), true),
+                // if (_temp1 && _temp1.error) return _temp1;
+                js::Stmt::If(js::IfStmt {
+                    span: DUMMY_SP,
+                    test: Box::new(state.mk_binary_expr(
+                        state.mk_binary_expr(
+                            js::Expr::Ident(state.mk_ident(&temp_var)),
+                            js::BinaryOp::LogicalAnd,
+                            state.mk_member_expr(
+                                js::Expr::Ident(state.mk_ident(&temp_var)),
+                                "error",
+                            ),
+                        ),
+                        js::BinaryOp::LogicalOr,
+                        state.mk_binary_expr(
+                            js::Expr::Ident(state.mk_ident(&temp_var)),
+                            js::BinaryOp::EqEqEq,
+                            state.mk_null_lit(),
+                        ),
+                    )),
+                    cons: Box::new(
+                        state.mk_return_stmt(Some(js::Expr::Ident(state.mk_ident(&temp_var)))),
+                    ),
+                    alt: None,
+                }),
+                // return _temp1.ok || _temp1;  (unwrap the success value)
+                state.mk_return_stmt(Some(state.mk_binary_expr(
+                    state.mk_member_expr(js::Expr::Ident(state.mk_ident(&temp_var)), "ok"),
+                    js::BinaryOp::LogicalOr,
+                    js::Expr::Ident(state.mk_ident(&temp_var)),
+                ))),
+            ];
+
+            Ok(state.mk_iife(stmts))
         }
 
         _ => {

@@ -2,6 +2,7 @@
 
 use boa_engine::{Context, JsResult, JsValue, Source};
 use mojes_mojo::*;
+use proc_macro2::TokenStream;
 use syn::{Block, Expr, ItemEnum, ItemStruct, Type, parse_quote};
 
 fn eval_js(code: &str) -> JsResult<JsValue> {
@@ -388,4 +389,32 @@ fn test_comprehensive_stress() {
         Ok(result) => println!("Stress test executed successfully: {:?}", result),
         Err(e) => println!("Stress test failed (expected): {:?}", e),
     }
+}
+
+#[test]
+fn test_error_return_full() {
+    let block: Block = parse_quote! {
+      {
+        fn foo(x: u32) -> Result<String, u32> {
+           if x == 42 {
+              return Err(42)
+           } else {
+              Ok(format!("Number: {}", x))
+           }
+        }
+        fn bar(tst: u32) -> Result<String, u32> {
+           let v = foo(tst + 1)?;
+           Ok(format!("Inner returned: {}", &v))
+        }
+
+        bar(32);
+      }
+    };
+
+    let js_code = rust_block_to_js(&block);
+    println!("DEBUG test_error_return_full js code: {}", &js_code);
+
+    // Should handle most of this, though match guards might fail
+    assert!(js_code.contains("const data"));
+    assert!(js_code.contains("for (const item of"));
 }
