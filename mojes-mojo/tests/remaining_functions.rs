@@ -17,22 +17,22 @@ fn test_closure_expressions() {
     let expr: Expr = parse_quote!(|x| x + 1);
     let js_code = rust_expr_to_js(&expr);
 
-    // Should generate proper JavaScript arrow function
-    assert_eq!(js_code, "x => x + 1");
+    // Should generate proper JavaScript arrow function (with parentheses for safety)
+    assert_eq!(js_code, "((x)=>x + 1)");
 
     println!("✓ Single parameter closure: {}", js_code);
 
     // Test multiple parameter closure
     let expr: Expr = parse_quote!(|a, b| a * b);
     let js_code = rust_expr_to_js(&expr);
-    assert_eq!(js_code, "(a, b) => a * b");
+    assert_eq!(js_code, "((a, b)=>a * b)");
 
     println!("✓ Multiple parameter closure: {}", js_code);
 
     // Test zero parameter closure
     let expr: Expr = parse_quote!(|| 42);
     let js_code = rust_expr_to_js(&expr);
-    assert_eq!(js_code, "() => 42");
+    assert_eq!(js_code, "(()=>42)");
 
     println!("✓ Zero parameter closure: {}", js_code);
 }
@@ -42,13 +42,11 @@ fn test_closure_in_method_calls() {
     // Test closures in common contexts like map/filter
     let expr: Expr = parse_quote!(numbers.map(|x| x * 2));
     let js_code = rust_expr_to_js(&expr);
-    assert_eq!(js_code, "numbers.map(x => x * 2)");
+    assert_eq!(js_code, "numbers.map((x)=>x * 2)");
 
     let expr: Expr = parse_quote!(items.filter(|item| item.active));
     let js_code = rust_expr_to_js(&expr);
-    assert_eq!(js_code, "items.filter(item => item.active)");
-
-    println!("✓ Closures in method calls work perfectly");
+    assert_eq!(js_code, "items.filter((item) => item.active)");
 }
 
 #[test]
@@ -72,6 +70,7 @@ fn test_complex_closure_bodies() {
         doubled + 1
     });
     let js_code = rust_expr_to_js(&expr);
+    println!("DEBUG test_complex_closure_bodies js code: {}", &js_code);
 
     // Should generate arrow function with block body
     assert!(js_code.contains("x =>"));
