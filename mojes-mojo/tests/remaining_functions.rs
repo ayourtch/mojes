@@ -73,11 +73,17 @@ fn test_complex_closure_bodies() {
     let js_code = rust_expr_to_js(&expr);
     println!("DEBUG test_complex_closure_bodies js code: {}", &js_code);
 
-    // Should generate arrow function with block body
-    assert!(js_code.contains("x =>"));
+    // Instead of checking for exact formatting, test functional correctness
     assert!(js_code.contains("doubled"));
+    assert!(js_code.contains("x * 2"));
+    assert!(js_code.contains("doubled + 1"));
 
-    println!("✓ Complex closure body: {}", js_code);
+    // Test that the generated closure actually works in JavaScript
+    let test_code = format!("const closure = {}; closure(5);", js_code);
+    let result = eval_js(&test_code).unwrap();
+    assert_eq!(result.as_number().unwrap(), 11.0); // (5 * 2) + 1 = 11
+
+    println!("✓ Complex closure body works correctly and returns 11");
 }
 
 #[test]
