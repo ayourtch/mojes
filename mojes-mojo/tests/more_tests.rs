@@ -138,8 +138,14 @@ fn test_vector_methods_with_args() {
     let expr: Expr = parse_quote!(vec.insert(0, item));
     let js_code = rust_expr_to_js(&expr);
 
-    println!("DEBUG test_vector_methods_with_args 1 js code: {}", &js_code1);
-    println!("DEBUG test_vector_methods_with_args 2 js code: {}", &js_code);
+    println!(
+        "DEBUG test_vector_methods_with_args 1 js code: {}",
+        &js_code1
+    );
+    println!(
+        "DEBUG test_vector_methods_with_args 2 js code: {}",
+        &js_code
+    );
     assert_eq!(js_code1, "vec.splice(index, 1)[0]");
     assert_eq!(js_code, "vec.splice(0, 0, item)");
 }
@@ -379,6 +385,10 @@ fn test_comprehensive_uncovered_execution() {
     };
 
     let js_code = rust_block_to_js(&block);
+    println!(
+        "DEBUG test_comprehensive_uncovered_execution js code: {}",
+        js_code
+    );
 
     // Should contain all the patterns we expect
     assert!(js_code.contains("+=")); // Compound assignment
@@ -415,7 +425,7 @@ fn test_tuple_expressions() {
 
     // Nested tuples
     let expr: Expr = parse_quote!(((a, b), (c, d)));
-    let js_code = rust_expr_to_js(&expr).replace("\n", "").replace(" ", "");;
+    let js_code = rust_expr_to_js(&expr).replace("\n", "").replace(" ", "");
     assert_eq!(js_code, "[[a,b],[c,d]]");
 
     // Empty tuple (unit type)
@@ -607,6 +617,10 @@ fn test_comprehensive_uncovered_execution_2() {
     };
 
     let js_code = rust_block_to_js(&block);
+    println!(
+        "DEBUG: test_comprehensive_uncovered_execution_2 js code: {}",
+        &js_code
+    );
 
     // Should contain all the uncovered patterns
     assert!(js_code.contains("+=")); // Compound assignment
