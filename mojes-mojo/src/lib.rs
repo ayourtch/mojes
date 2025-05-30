@@ -373,6 +373,18 @@ pub fn generate_js_methods_for_impl_with_state(
 
     let mut js_items = Vec::new();
 
+    // Add header comment for the methods
+    let header_comment = format!("// Methods for {}", struct_name);
+    let comment_stmt = js::Stmt::Expr(js::ExprStmt {
+        span: DUMMY_SP,
+        expr: Box::new(js::Expr::Ident(js::Ident::new(
+            header_comment.into(),
+            DUMMY_SP,
+            SyntaxContext::empty(),
+        ))),
+    });
+    js_items.push(js::ModuleItem::Stmt(comment_stmt));
+
     for item in &input_impl.items {
         if let ImplItem::Fn(method) = item {
             match generate_js_method(&struct_name, method, &mut state) {
