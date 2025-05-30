@@ -3677,13 +3677,56 @@ fn create_match_condition(
 fn chain_if_statement(current: &mut js::Stmt, next: js::Stmt) {
     if let js::Stmt::If(if_stmt) = current {
         if if_stmt.alt.is_none() {
-            if_stmt.alt = Some(Box::new(next));
+            // Check if the next statement is "if (true)" and convert to simple else
+            if let js::Stmt::If(next_if) = &next {
+                if is_true_condition(&next_if.test) {
+                    // Convert "else if (true)" to just "else { // Default case"
+                    // We need to add the comment to the block somehow
+                    if let js::Stmt::Block(block_stmt) = &*next_if.cons {
+                        // Create a new block with a comment by modifying the first statement
+                        let mut new_stmts = block_stmt.stmts.clone();
+                        if !new_stmts.is_empty() {
+                            // Add comment as an expression statement at the beginning
+                            let comment_stmt = js::Stmt::Expr(js::ExprStmt {
+                                span: DUMMY_SP,
+                                expr: Box::new(js::Expr::Ident(js::Ident::new(
+                                    "// Default case".into(),
+                                    DUMMY_SP,
+                                    SyntaxContext::empty(),
+                                ))),
+                            });
+                            new_stmts.insert(0, comment_stmt);
+                        }
+
+                        let new_block = js::Stmt::Block(js::BlockStmt {
+                            span: DUMMY_SP,
+                            stmts: new_stmts,
+                            ctxt: SyntaxContext::empty(),
+                        });
+                        if_stmt.alt = Some(Box::new(new_block));
+                    } else {
+                        if_stmt.alt = Some(next_if.cons.clone());
+                    }
+                } else {
+                    if_stmt.alt = Some(Box::new(next));
+                }
+            } else {
+                if_stmt.alt = Some(Box::new(next));
+            }
         } else {
             // Recursively chain
             if let Some(ref mut alt) = if_stmt.alt {
                 chain_if_statement(alt, next);
             }
         }
+    }
+}
+/// Helper to check if a condition is just "true"
+fn is_true_condition(expr: &js::Expr) -> bool {
+    match expr {
+        js::Expr::Lit(js::Lit::Bool(js::Bool { value: true, .. })) => true,
+        js::Expr::Ident(ident) if ident.sym == "true" => true, // Can be removed
+        _ => false,
     }
 }
 
