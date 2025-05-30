@@ -1422,6 +1422,39 @@ pub fn rust_expr_to_js_with_action_and_state(
             // Create cast function call like Number(expr)
             Ok(state.mk_call_expr(js::Expr::Ident(state.mk_ident(cast_fn)), vec![inner_expr]))
         }
+        // Handle repeat expressions [value; count]
+        Expr::Repeat(repeat_expr) => {
+            let value = rust_expr_to_js_with_state(&repeat_expr.expr, state)?;
+            let count = rust_expr_to_js_with_state(&repeat_expr.len, state)?;
+
+            // Generate: Array.from({length: count}, () => value)
+            let array_from = state.mk_member_expr(js::Expr::Ident(state.mk_ident("Array")), "from");
+
+            // Create {length: count} object
+            let length_obj = js::Expr::Object(js::ObjectLit {
+                span: DUMMY_SP,
+                props: vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+                    js::KeyValueProp {
+                        key: js::PropName::Ident(state.mk_ident_name("length")),
+                        value: Box::new(count),
+                    },
+                )))],
+            });
+
+            // Create () => value arrow function
+            let arrow_fn = js::ArrowExpr {
+                span: DUMMY_SP,
+                params: vec![],
+                body: Box::new(js::BlockStmtOrExpr::Expr(Box::new(value))),
+                is_async: false,
+                is_generator: false,
+                type_params: None,
+                return_type: None,
+                ctxt: SyntaxContext::empty(),
+            };
+
+            Ok(state.mk_call_expr(array_from, vec![length_obj, js::Expr::Arrow(arrow_fn)]))
+        }
 
         _ => {
             state.add_warning(format!("Unsupported expression type: {:?}", expr));

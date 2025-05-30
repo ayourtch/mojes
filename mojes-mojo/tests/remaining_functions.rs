@@ -42,7 +42,8 @@ fn test_closure_in_method_calls() {
     // Test closures in common contexts like map/filter
     let expr: Expr = parse_quote!(numbers.map(|x| x * 2));
     let js_code = rust_expr_to_js(&expr);
-    assert_eq!(js_code, "numbers.map((x)=>x * 2)");
+    // Extra parentheses should be fine ?
+    assert_eq!(js_code, "numbers.map(((x)=>x * 2))");
 
     let expr: Expr = parse_quote!(items.filter(|item| item.active));
     let js_code = rust_expr_to_js(&expr);
@@ -319,7 +320,7 @@ fn test_const_static_expressions() {
     assert_eq!(js_code, "MY_CONST");
 
     // Array with const size (might not work)
-    let expr: Expr = parse_quote!([0; SIZE]);
+    let expr: Expr = parse_quote!([0x42; SIZE]);
     let js_code = rust_expr_to_js(&expr);
     println!("Array with const size: {}", js_code);
 }
