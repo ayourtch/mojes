@@ -74,7 +74,7 @@ impl Element {
         false
     }
 
-    pub fn addEventListener(&self, _event_type: &str, _callback: fn()) {
+    pub fn addEventListener(&self, _event_type: &str, _callback: fn(_event: Event)) {
         // Mock implementation for transpilation
     }
 
@@ -441,7 +441,7 @@ impl Window {
         println!("WINDOW.BLUR");
     }
 
-    pub fn addEventListener(&self, _event_type: &str, _callback: fn()) {
+    pub fn addEventListener(&self, _event_type: &str, _callback: fn(_event: Event)) {
         // Mock implementation for transpilation
     }
 
@@ -751,7 +751,7 @@ impl History {
 // Event interface
 #[js_type]
 pub struct Event {
-    pub eventType: String,
+    pub r#type: String,
     pub bubbles: bool,
     pub cancelable: bool,
     pub defaultPrevented: bool,
@@ -760,10 +760,17 @@ pub struct Event {
     pub timeStamp: f64,
 }
 
+use std::fmt::Display;
+
+impl Display for Event {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Event")
+    }
+}
 impl Event {
     pub fn new(event_type: &str) -> Self {
         Self {
-            eventType: event_type.to_string(),
+            r#type: event_type.to_string(),
             bubbles: false,
             cancelable: false,
             defaultPrevented: false,
