@@ -247,7 +247,7 @@ class Person {
     fn test_mutable_methods_execution() {
         let struct_js = generate_js_class_for_struct(&parse_quote! {
             struct Counter {
-                value: i32,
+                r#value: i32,
             }
         });
 

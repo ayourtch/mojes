@@ -1250,8 +1250,14 @@ pub fn rust_expr_to_js_with_action_and_state(
             match &field.member {
                 syn::Member::Named(ident) => {
                     // Named field access: obj.field
+                    // Handle raw identifiers by removing the r# prefix
                     let member_name = ident.to_string();
-                    Ok(state.mk_member_expr(base, &member_name))
+                    let clean_member_name = if member_name.starts_with("r#") {
+                        &member_name[2..] // Remove "r#" prefix
+                    } else {
+                        &member_name
+                    };
+                    Ok(state.mk_member_expr(base, clean_member_name))
                 }
                 syn::Member::Unnamed(index) => {
                     // Tuple field access: obj[0]
@@ -2499,8 +2505,14 @@ pub fn generate_js_class_for_struct_with_state(
             .filter_map(|field| {
                 if let Some(ident) = &field.ident {
                     let field_name = ident.to_string();
+                    // Handle raw identifiers by removing r# prefix
+                    let clean_field_name = if field_name.starts_with("r#") {
+                        field_name[2..].to_string()
+                    } else {
+                        field_name
+                    };
                     let field_type = format_rust_type(&field.ty);
-                    Some((field_name, field_type))
+                    Some((clean_field_name, field_type))
                 } else {
                     None
                 }

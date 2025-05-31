@@ -52,6 +52,16 @@ mod tests_dom {
     }
 
     #[test]
+    fn test_raw_names() {
+        let expr: Expr = parse_quote! {
+           format!("Test: {} {}", mystruct.r#type, &mystruct.r#type)
+        };
+        let js_code = rust_expr_to_js(&expr);
+        println!("DEBUG test_raw_names js code: {}", &js_code);
+        assert!(!js_code.contains("mystruct.r#type"));
+    }
+
+    #[test]
     fn test_closure_in_timeout_no_iife() {
         // Test that closures in setTimeout don't get wrapped in IIFE
         let expr: Expr = parse_quote! {
