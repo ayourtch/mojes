@@ -2056,39 +2056,118 @@ fn handle_format_like_macro(
     let js_args = format_args?;
 
     // Check if there are placeholders
-    if !format_str.contains("{}") {
+    if !format_str.contains("{}") && !format_str.contains("{:?}") {
         return Ok(state.mk_template_literal(vec![format_str.into()], vec![]));
         // this will return just the quoted format string.
         // return Ok(state.mk_str_lit(format_str));
     }
 
-    // Split format string at placeholders
-    let str_parts: Vec<&str> = format_str.split("{}").collect();
-
-    // Create template literal
-    let mut template_parts = Vec::new();
-    let mut template_exprs = Vec::new();
-
-    for (i, part) in str_parts.iter().enumerate() {
-        template_parts.push(part.to_string());
-
-        if i < js_args.len() {
-            template_exprs.push(js_args[i].clone());
-        }
-    }
-
-    // Handle the case where we have more parts than expressions
-    if template_parts.len() > template_exprs.len() + 1 {
-        // Add empty expressions for missing placeholders
-        while template_exprs.len() < template_parts.len() - 1 {
-            template_exprs.push(state.mk_str_lit(""));
-        }
-    }
+    // Enhanced parsing to handle both {} and {:?} placeholders
+    let (template_parts, template_exprs) =
+        parse_format_string_with_debug(format_str, js_args, state)?;
 
     Ok(state.mk_template_literal(template_parts, template_exprs))
 }
 
-/// Handle format! macro with parsed arguments
+/// Parse format string handling both {} and {:?} placeholders
+fn parse_format_string_with_debug(
+    format_str: &str,
+    js_args: Vec<js::Expr>,
+    state: &mut TranspilerState,
+) -> Result<(Vec<String>, Vec<js::Expr>), String> {
+    let mut template_parts = Vec::new();
+    let mut template_exprs = Vec::new();
+    let mut arg_index = 0;
+
+    let mut chars = format_str.chars().peekable();
+    let mut current_part = String::new();
+
+    while let Some(ch) = chars.next() {
+        if ch == '{' {
+            if let Some(&next_ch) = chars.peek() {
+                if next_ch == '{' {
+                    // Escaped brace {{
+                    current_part.push('{');
+                    chars.next(); // consume the second {
+                    continue;
+                }
+            }
+
+            // Start of placeholder
+            template_parts.push(current_part);
+            current_part = String::new();
+
+            // Parse the placeholder content
+            let mut placeholder_content = String::new();
+            let mut found_closing = false;
+
+            while let Some(inner_ch) = chars.next() {
+                if inner_ch == '}' {
+                    found_closing = true;
+                    break;
+                } else {
+                    placeholder_content.push(inner_ch);
+                }
+            }
+
+            if !found_closing {
+                return Err("Unclosed placeholder in format string".to_string());
+            }
+
+            // Process the placeholder
+            if arg_index < js_args.len() {
+                let expr = if placeholder_content == ":?" {
+                    // Debug format - wrap with debug_repr
+                    state.mk_call_expr(
+                        js::Expr::Ident(state.mk_ident("debug_repr")),
+                        vec![js_args[arg_index].clone()],
+                    )
+                } else if placeholder_content.is_empty() {
+                    // Regular format
+                    js_args[arg_index].clone()
+                } else {
+                    // Other format specifiers - for now treat as regular
+                    // Could be extended to handle other format types like {:x}, {:02}, etc.
+                    js_args[arg_index].clone()
+                };
+
+                template_exprs.push(expr);
+                arg_index += 1;
+            } else {
+                // Not enough arguments - add empty string
+                template_exprs.push(state.mk_str_lit(""));
+            }
+        } else if ch == '}' {
+            if let Some(&next_ch) = chars.peek() {
+                if next_ch == '}' {
+                    // Escaped brace }}
+                    current_part.push('}');
+                    chars.next(); // consume the second }
+                    continue;
+                }
+            }
+            // Unmatched closing brace - just add it
+            current_part.push(ch);
+        } else {
+            current_part.push(ch);
+        }
+    }
+
+    // Add the final part
+    template_parts.push(current_part);
+
+    // Ensure we have the right number of parts vs expressions
+    while template_parts.len() < template_exprs.len() + 1 {
+        template_parts.push("".to_string());
+    }
+    while template_parts.len() > template_exprs.len() + 1 {
+        template_parts.pop();
+    }
+
+    Ok((template_parts, template_exprs))
+}
+
+/// Handle format! macro with parsed arguments and debug support
 fn handle_format_macro_with_state(
     args: &Punctuated<Expr, Comma>,
     state: &mut TranspilerState,
@@ -2142,13 +2221,11 @@ fn handle_format_macro_with_state(
                     .collect();
                 let js_args = format_args?;
 
-                // Split format string at placeholders
-                let parts: Vec<&str> = format_str.split("{}").collect();
+                // Parse with debug support
+                let (template_parts, template_exprs) =
+                    parse_format_string_with_debug(&format_str, js_args, state)?;
 
-                // Create template literal
-                let template_parts: Vec<String> = parts.iter().map(|s| s.to_string()).collect();
-
-                return Ok(state.mk_template_literal(template_parts, js_args));
+                return Ok(state.mk_template_literal(template_parts, template_exprs));
             }
         }
     }
