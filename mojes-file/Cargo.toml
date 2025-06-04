@@ -1,0 +1,12 @@
+[package]
+name = "mojes-file"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mojes-mojo = { path = "../mojes-mojo" } 
+clap = { version = "4.0", features = ["derive"] }
+syn = { version = "2.0", features = ["full", "parsing", "printing"] }
+boa_engine = "*"
+swc_common = "*"
+swc_ecma_ast = "*"

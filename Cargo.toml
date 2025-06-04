@@ -1,5 +1,5 @@
 [workspace]
-members = [ "mojes", "mojes-derive", "mojes-dom-api", "mojes-mojo",
+members = [ "mojes", "mojes-derive", "mojes-dom-api", "mojes-file", "mojes-mojo",
 ]
 resolver="2"
 
