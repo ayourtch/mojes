@@ -368,26 +368,50 @@ function assert(condition, message) {
 }
 
 fn run_javascript(js_code: &str, function_to_call: Option<&String>) -> Result<(), Box<dyn std::error::Error>> {
+    use boa_engine::{JsValue, NativeFunction, object::FunctionObjectBuilder};
+
     // Create a new JavaScript context
     let mut context = Context::default();
+
+    // Define a native print function
+    let print_fn = NativeFunction::from_fn_ptr(|_, args, _| {
+        let output = args
+            .iter()
+            .map(|arg| arg.display().to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        println!("{}", output);
+        Ok(JsValue::undefined())
+    });
+
+    // Create a function object from the native function
+    let print_function = FunctionObjectBuilder::new(&mut context, print_fn)
+        .name("print")
+        .length(0)
+        .build();
+
+    // Register the print function globally
+    context
+        .register_global_property("print", print_function, boa_engine::property::Attribute::all())
+        .expect("Failed to register print function");
 
     // Add console object with log, error, warn, etc.
     let console_code = r#"
 const console = {
     log: function(...args) {
-        print(args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' '));
+        print(...args);
     },
     error: function(...args) {
-        print('[ERROR] ' + args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' '));
+        print('[ERROR]', ...args);
     },
     warn: function(...args) {
-        print('[WARN] ' + args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' '));
+        print('[WARN]', ...args);
     },
     info: function(...args) {
-        print('[INFO] ' + args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' '));
+        print('[INFO]', ...args);
     },
     debug: function(...args) {
-        print('[DEBUG] ' + args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' '));
+        print('[DEBUG]', ...args);
     }
 };
 "#;
