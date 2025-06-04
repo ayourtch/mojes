@@ -1,16 +1,13 @@
+use clap::{Arg, Command};
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
-use clap::{Arg, Command};
-use syn::{parse_file, Item};
+use syn::{Item, parse_file};
 
 // Import from your mojes-mojo crate
 use mojes_mojo::{
-    generate_js_methods_for_impl_with_state,
-    generate_js_class_for_struct_with_state,
-    generate_js_enum_with_state,
-    ast_to_code,
-    TranspilerState,
+    TranspilerState, ast_to_code, generate_js_class_for_struct_with_state,
+    generate_js_enum_with_state, generate_js_methods_for_impl_with_state,
 };
 
 // Boa imports for JavaScript execution
@@ -42,6 +39,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .require_equals(false),
         )
         .arg(
+            Arg::new("args")
+                .long("args")
+                .help("Arguments to pass to the transpiled program (available as env::args())")
+                .value_name("ARG")
+                .num_args(0..)
+                .action(clap::ArgAction::Append),
+        )
+        .arg(
             Arg::new("pretty")
                 .short('p')
                 .long("pretty")
@@ -54,15 +59,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output_file = matches.get_one::<String>("output");
     let should_run = matches.contains_id("run");
     let run_function = matches.get_one::<String>("run");
+
+    // Build program args: always start with program name, then add any additional args
+    let mut program_args = vec![input_file.to_string()];
+    if let Some(additional_args) = matches.get_many::<String>("args") {
+        program_args.extend(additional_args.cloned());
+    }
     let pretty_print = matches.get_flag("pretty");
+
+    // Debug the command line parsing
+    println!("DEBUG: should_run = {}", should_run);
+    println!("DEBUG: run_function = {:?}", run_function);
+    println!("DEBUG: program_args = {:?}", program_args);
 
     // Read the Rust source file
     let rust_code = fs::read_to_string(input_file)
         .map_err(|e| format!("Failed to read input file '{}': {}", input_file, e))?;
 
     // Parse the Rust code
-    let syntax_tree = parse_file(&rust_code)
-        .map_err(|e| format!("Failed to parse Rust code: {}", e))?;
+    let syntax_tree =
+        parse_file(&rust_code).map_err(|e| format!("Failed to parse Rust code: {}", e))?;
 
     // Transpile to JavaScript
     let js_code = transpile_rust_file(&syntax_tree)?;
@@ -87,7 +103,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Run the JavaScript code if requested
     if should_run {
         println!("Running transpiled JavaScript code...\n");
-        run_javascript(&final_js_code, run_function)?;
+        run_javascript(&final_js_code, run_function, &program_args)?;
+    } else {
+        println!("Not running JavaScript (--run not specified or not detected)");
     }
 
     Ok(())
@@ -98,28 +116,31 @@ fn transpile_rust_file(syntax_tree: &syn::File) -> Result<String, Box<dyn std::e
     let mut js_items = Vec::new();
 
     // Add file header comment
-    js_items.push(swc_ecma_ast::ModuleItem::Stmt(
-        swc_ecma_ast::Stmt::Expr(swc_ecma_ast::ExprStmt {
+    js_items.push(swc_ecma_ast::ModuleItem::Stmt(swc_ecma_ast::Stmt::Expr(
+        swc_ecma_ast::ExprStmt {
             span: swc_common::DUMMY_SP,
             expr: Box::new(swc_ecma_ast::Expr::Ident(swc_ecma_ast::Ident::new(
                 "// Transpiled from Rust using mojes-mojo".into(),
                 swc_common::DUMMY_SP,
                 swc_common::SyntaxContext::empty(),
             ))),
-        })
-    ));
+        },
+    )));
 
     // Process each top-level item in the Rust file
     for item in &syntax_tree.items {
         match item {
             Item::Struct(item_struct) => {
-                let class_item = generate_js_class_for_struct_with_state(item_struct)
-                    .map_err(|e| format!("Failed to transpile struct '{}': {}", item_struct.ident, e))?;
+                let class_item =
+                    generate_js_class_for_struct_with_state(item_struct).map_err(|e| {
+                        format!("Failed to transpile struct '{}': {}", item_struct.ident, e)
+                    })?;
                 js_items.push(class_item);
             }
             Item::Enum(item_enum) => {
-                let enum_items = generate_js_enum_with_state(item_enum)
-                    .map_err(|e| format!("Failed to transpile enum '{}': {}", item_enum.ident, e))?;
+                let enum_items = generate_js_enum_with_state(item_enum).map_err(|e| {
+                    format!("Failed to transpile enum '{}': {}", item_enum.ident, e)
+                })?;
                 js_items.extend(enum_items);
             }
             Item::Impl(item_impl) => {
@@ -139,16 +160,16 @@ fn transpile_rust_file(syntax_tree: &syn::File) -> Result<String, Box<dyn std::e
             Item::Mod(item_mod) => {
                 // Add a comment for module declarations
                 let comment = format!("// Module: {}", item_mod.ident);
-                js_items.push(swc_ecma_ast::ModuleItem::Stmt(
-                    swc_ecma_ast::Stmt::Expr(swc_ecma_ast::ExprStmt {
+                js_items.push(swc_ecma_ast::ModuleItem::Stmt(swc_ecma_ast::Stmt::Expr(
+                    swc_ecma_ast::ExprStmt {
                         span: swc_common::DUMMY_SP,
                         expr: Box::new(swc_ecma_ast::Expr::Ident(swc_ecma_ast::Ident::new(
                             comment.into(),
                             swc_common::DUMMY_SP,
                             swc_common::SyntaxContext::empty(),
                         ))),
-                    })
-                ));
+                    },
+                )));
             }
             Item::Const(item_const) => {
                 // Handle const declarations
@@ -163,32 +184,31 @@ fn transpile_rust_file(syntax_tree: &syn::File) -> Result<String, Box<dyn std::e
             _ => {
                 // Add a comment for unsupported items
                 let comment = format!("// Unsupported Rust item: {:?}", item);
-                js_items.push(swc_ecma_ast::ModuleItem::Stmt(
-                    swc_ecma_ast::Stmt::Expr(swc_ecma_ast::ExprStmt {
+                js_items.push(swc_ecma_ast::ModuleItem::Stmt(swc_ecma_ast::Stmt::Expr(
+                    swc_ecma_ast::ExprStmt {
                         span: swc_common::DUMMY_SP,
                         expr: Box::new(swc_ecma_ast::Expr::Ident(swc_ecma_ast::Ident::new(
                             comment.into(),
                             swc_common::DUMMY_SP,
                             swc_common::SyntaxContext::empty(),
                         ))),
-                    })
-                ));
+                    },
+                )));
             }
         }
     }
 
     // Convert AST to JavaScript code
-    ast_to_code(&js_items)
-        .map_err(|e| format!("Failed to generate JavaScript code: {}", e).into())
+    ast_to_code(&js_items).map_err(|e| format!("Failed to generate JavaScript code: {}", e).into())
 }
 
 fn transpile_function(
     item_fn: &syn::ItemFn,
     state: &mut TranspilerState,
 ) -> Result<swc_ecma_ast::ModuleItem, Box<dyn std::error::Error>> {
-    use swc_ecma_ast as js;
+    use mojes_mojo::{BlockAction, escape_js_identifier, rust_block_to_js_with_state};
     use swc_common::{DUMMY_SP, SyntaxContext};
-    use mojes_mojo::{rust_block_to_js_with_state, BlockAction, escape_js_identifier};
+    use swc_ecma_ast as js;
 
     let func_name = item_fn.sig.ident.to_string();
     let js_func_name = escape_js_identifier(&func_name);
@@ -206,7 +226,11 @@ fn transpile_function(
                         let param_name = pat_ident.ident.to_string();
                         let js_param_name = escape_js_identifier(&param_name);
                         Some(js::Pat::Ident(js::BindingIdent {
-                            id: js::Ident::new(js_param_name.into(), DUMMY_SP, SyntaxContext::empty()),
+                            id: js::Ident::new(
+                                js_param_name.into(),
+                                DUMMY_SP,
+                                SyntaxContext::empty(),
+                            ),
                             type_ann: None,
                         }))
                     } else {
@@ -246,16 +270,18 @@ fn transpile_function(
         function: Box::new(function),
     };
 
-    Ok(js::ModuleItem::Stmt(js::Stmt::Decl(js::Decl::Fn(func_decl))))
+    Ok(js::ModuleItem::Stmt(js::Stmt::Decl(js::Decl::Fn(
+        func_decl,
+    ))))
 }
 
 fn transpile_const(
     item_const: &syn::ItemConst,
     state: &mut TranspilerState,
 ) -> Result<swc_ecma_ast::ModuleItem, Box<dyn std::error::Error>> {
-    use swc_ecma_ast as js;
+    use mojes_mojo::{escape_js_identifier, rust_expr_to_js_with_state};
     use swc_common::{DUMMY_SP, SyntaxContext};
-    use mojes_mojo::{rust_expr_to_js_with_state, escape_js_identifier};
+    use swc_ecma_ast as js;
 
     let const_name = item_const.ident.to_string();
     let js_const_name = escape_js_identifier(&const_name);
@@ -279,16 +305,18 @@ fn transpile_const(
         ctxt: SyntaxContext::empty(),
     };
 
-    Ok(js::ModuleItem::Stmt(js::Stmt::Decl(js::Decl::Var(Box::new(var_decl)))))
+    Ok(js::ModuleItem::Stmt(js::Stmt::Decl(js::Decl::Var(
+        Box::new(var_decl),
+    ))))
 }
 
 fn transpile_static(
     item_static: &syn::ItemStatic,
     state: &mut TranspilerState,
 ) -> Result<swc_ecma_ast::ModuleItem, Box<dyn std::error::Error>> {
-    use swc_ecma_ast as js;
+    use mojes_mojo::{escape_js_identifier, rust_expr_to_js_with_state};
     use swc_common::{DUMMY_SP, SyntaxContext};
-    use mojes_mojo::{rust_expr_to_js_with_state, escape_js_identifier};
+    use swc_ecma_ast as js;
 
     let static_name = item_static.ident.to_string();
     let js_static_name = escape_js_identifier(&static_name);
@@ -319,7 +347,9 @@ fn transpile_static(
         ctxt: SyntaxContext::empty(),
     };
 
-    Ok(js::ModuleItem::Stmt(js::Stmt::Decl(js::Decl::Var(Box::new(var_decl)))))
+    Ok(js::ModuleItem::Stmt(js::Stmt::Decl(js::Decl::Var(
+        Box::new(var_decl),
+    ))))
 }
 
 fn add_js_runtime_helpers(js_code: &str, pretty: bool) -> String {
@@ -361,17 +391,33 @@ function assert(condition, message) {
     }
 }
 
+// Environment module for Rust std::env functions
+const env = {
+    args: function() {
+        if (typeof globalThis.__rust_args !== 'undefined' && Array.isArray(globalThis.__rust_args)) {
+            return globalThis.__rust_args.slice(); // Return a copy
+        }
+        return []; // Return empty array if not set
+    }
+};
+
 "#;
 
     let separator = if pretty { "\n\n" } else { "\n" };
     format!("{}{}{}", helpers.trim(), separator, js_code)
 }
 
-fn run_javascript(js_code: &str, function_to_call: Option<&String>) -> Result<(), Box<dyn std::error::Error>> {
+fn run_javascript(
+    js_code: &str,
+    function_to_call: Option<&String>,
+    args: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
     use boa_engine::{JsValue, NativeFunction, object::FunctionObjectBuilder};
 
     // Create a new JavaScript context
     let mut context = Context::default();
+
+    println!("=== RUST DEBUG: Starting JavaScript execution ===");
 
     // Define a native print function
     let print_fn = NativeFunction::from_fn_ptr(|_, args, _| {
@@ -380,22 +426,25 @@ fn run_javascript(js_code: &str, function_to_call: Option<&String>) -> Result<()
             .map(|arg| arg.display().to_string())
             .collect::<Vec<_>>()
             .join(" ");
-        println!("{}", output);
+        println!("JS: {}", output);
         Ok(JsValue::undefined())
     });
 
-    // Create a function object from the native function
+    // Create and register the print function
     let print_function = FunctionObjectBuilder::new(&mut context, print_fn)
         .name("print")
         .length(0)
         .build();
 
-    // Register the print function globally
     context
-        .register_global_property("print", print_function, boa_engine::property::Attribute::all())
+        .register_global_property(
+            "print",
+            print_function,
+            boa_engine::property::Attribute::all(),
+        )
         .expect("Failed to register print function");
 
-    // Add console object with log, error, warn, etc.
+    // Create console object
     let console_code = r#"
 const console = {
     log: function(...args) {
@@ -416,50 +465,65 @@ const console = {
 };
 "#;
 
-    // Initialize console object
+    println!("RUST DEBUG: Setting up console object...");
     context.eval(Source::from_bytes(console_code))?;
 
-    // Evaluate the JavaScript code
-    match context.eval(Source::from_bytes(js_code)) {
-        Ok(_) => {
-            // If a specific function was requested, try to call it
-            if let Some(func_name) = function_to_call {
-                println!("Calling function: {}()", func_name);
-                let call_code = format!("{}()", func_name);
-                match context.eval(Source::from_bytes(&call_code)) {
-                    Ok(result) => {
-                        let result_str = result.display().to_string();
-                        if result_str != "undefined" {
-                            println!("Function result: {}", result_str);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Error calling function '{}': {}", func_name, e);
-                        return Err(format!("Function call failed: {}", e).into());
-                    }
-                }
-            } else {
-                // Try to call main() if it exists and no specific function was requested
-                match context.eval(Source::from_bytes("typeof main !== 'undefined' ? main() : undefined")) {
-                    Ok(result) => {
-                        let result_str = result.display().to_string();
-                        if result_str != "undefined" {
-                            println!("main() result: {}", result_str);
-                        }
-                    }
-                    Err(_) => {
-                        // main() doesn't exist or failed, that's okay
-                        println!("No main() function found or no specific function requested.");
-                    }
+    // Set program arguments FIRST, before loading any other code
+    let args_js_code = format!(
+        "globalThis.__rust_args = [{}]; console.log('RUST ARGS SET:', JSON.stringify(globalThis.__rust_args));",
+        args.iter()
+            .map(|arg| format!("\"{}\"", arg.replace("\"", "\\\"")))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    println!("RUST DEBUG: Setting arguments: {}", args_js_code);
+    context.eval(Source::from_bytes(&args_js_code))?;
+
+    // Now load and execute the main JavaScript code
+    println!("RUST DEBUG: Loading main JavaScript code...");
+    context.eval(Source::from_bytes(js_code))?;
+
+    // Test that env.args() works
+    println!("RUST DEBUG: Testing env.args()...");
+    context.eval(Source::from_bytes(
+        "console.log('ENV ARGS TEST:', env.args());",
+    ))?;
+
+    // Call the requested function
+    if let Some(func_name) = function_to_call {
+        println!("RUST DEBUG: Calling function: {}()", func_name);
+        let call_code = format!("{}()", func_name);
+        match context.eval(Source::from_bytes(&call_code)) {
+            Ok(result) => {
+                let result_str = result.display().to_string();
+                if result_str != "undefined" {
+                    println!("RUST DEBUG: Function result: {}", result_str);
                 }
             }
+            Err(e) => {
+                eprintln!("RUST DEBUG: Error calling function '{}': {}", func_name, e);
+                return Err(format!("Function call failed: {}", e).into());
+            }
         }
-        Err(e) => {
-            eprintln!("JavaScript execution error: {}", e);
-            return Err(format!("JavaScript execution failed: {}", e).into());
+    } else {
+        // Try to call main() if it exists
+        match context.eval(Source::from_bytes(
+            "typeof main !== 'undefined' ? main() : undefined",
+        )) {
+            Ok(result) => {
+                let result_str = result.display().to_string();
+                if result_str != "undefined" {
+                    println!("RUST DEBUG: main() result: {}", result_str);
+                }
+            }
+            Err(_) => {
+                println!("RUST DEBUG: No main() function found.");
+            }
         }
     }
 
+    println!("=== RUST DEBUG: JavaScript execution completed ===");
     Ok(())
 }
 
