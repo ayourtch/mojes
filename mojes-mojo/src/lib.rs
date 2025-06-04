@@ -914,7 +914,7 @@ pub fn rust_block_to_js_with_state(
     state: &mut TranspilerState,
 ) -> Result<Vec<js::Stmt>, String> {
     let mut js_stmts = Vec::new();
-    println!("DEBUG BLK: {:?}", &block_action);
+    println!("DEBUG BLK: {:?} {:?}", &block_action, &block);
     if block_action == BlockAction::NoReturn {
         // panic!("XXX");
     }
@@ -1914,6 +1914,10 @@ fn handle_function_call(
     }
 }
 
+fn contains_format_arguments(s: &str) -> bool {
+    s.contains("{}") || s.contains("{:?}")
+}
+
 /// Handle macro expressions
 fn handle_macro_expr(mac: &syn::Macro, state: &mut TranspilerState) -> Result<js::Expr, String> {
     let macro_name = if let Some(segment) = mac.path.segments.last() {
@@ -1923,6 +1927,7 @@ fn handle_macro_expr(mac: &syn::Macro, state: &mut TranspilerState) -> Result<js
     };
 
     let tokens = mac.tokens.to_string();
+    println!("MACRO-DEBUG: {}", macro_name.as_str());
 
     match macro_name.as_str() {
         "println" | "print" => {
@@ -1936,7 +1941,7 @@ fn handle_macro_expr(mac: &syn::Macro, state: &mut TranspilerState) -> Result<js
 
             if tokens.trim().is_empty() {
                 Ok(state.mk_call_expr(console_expr, vec![]))
-            } else if tokens.contains("{}") {
+            } else if contains_format_arguments(&tokens) {
                 // Format-style macro
                 let format_result = handle_format_like_macro(&tokens, state)?;
                 Ok(state.mk_call_expr(console_expr, vec![format_result]))
@@ -2172,6 +2177,7 @@ fn handle_format_macro_with_state(
     args: &Punctuated<Expr, Comma>,
     state: &mut TranspilerState,
 ) -> Result<js::Expr, String> {
+    println!("DEBUG-handle_format_macro_with_state");
     if args.is_empty() {
         return Ok(js::Expr::Tpl(js::Tpl {
             span: DUMMY_SP,

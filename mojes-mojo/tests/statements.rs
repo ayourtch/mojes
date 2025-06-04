@@ -17,6 +17,35 @@ fn eval_block_as_function(block_js: &str) -> JsResult<JsValue> {
 }
 
 #[test]
+fn test_function_declarations() {
+    // Simple let binding
+    let block: Block = parse_quote! {
+        {
+            fn foo() {
+               println!("TEST1: {}", 41);
+               println!("TEST2: {:?}", 42);
+            }
+            let x = 5;
+        }
+    };
+
+    let js_code = rust_block_to_js(&block);
+    eprintln!("DEBUG test_function_declarations js code: {}", &js_code);
+    assert_eq!(js_code.matches("log(`TES").count(), 2);
+    assert!(js_code.contains("const x = 5"));
+
+    // Mutable let binding
+    let block: Block = parse_quote! {
+        {
+            let mut y = 10;
+        }
+    };
+
+    let js_code = rust_block_to_js(&block);
+    assert!(js_code.contains("let y = 10"));
+}
+
+#[test]
 fn test_variable_declarations() {
     // Simple let binding
     let block: Block = parse_quote! {

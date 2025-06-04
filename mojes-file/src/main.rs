@@ -129,6 +129,7 @@ fn transpile_rust_file(syntax_tree: &syn::File) -> Result<String, Box<dyn std::e
 
     // Process each top-level item in the Rust file
     for item in &syntax_tree.items {
+        println!("TRANSPILE: {:?}", &item);
         match item {
             Item::Struct(item_struct) => {
                 let class_item =
