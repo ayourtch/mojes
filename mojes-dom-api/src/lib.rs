@@ -159,11 +159,13 @@ impl Element {
 
 // Document interface
 #[js_type]
-pub struct Document {}
+pub struct Document {
+   pub readyState: &'static str,
+}
 
 impl Document {
     pub const fn new() -> Self {
-        Self {}
+        Self { readyState: "ready" }
     }
 
     pub fn getElementById(&self, id: &str) -> Option<Element> {
@@ -256,10 +258,6 @@ impl Document {
 
     pub fn URL(&self) -> String {
         "http://localhost:3000".to_string()
-    }
-
-    pub fn readyState(&self) -> String {
-        "complete".to_string()
     }
 }
 
