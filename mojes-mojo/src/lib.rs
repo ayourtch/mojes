@@ -4194,6 +4194,124 @@ fn handle_pattern_binding(
                 panic!("Invalid struct pattern path: {:?}", struct_pat.path);
             }
         }
+        Pat::Tuple(tuple_pat) => {
+            // Handle tuple patterns like (Some(token), Some(signature))
+            // Use direct array access _match_value[i] without intermediate variables
+            let mut conditions = Vec::new();
+            
+            for (i, elem_pat) in tuple_pat.elems.iter().enumerate() {
+                // Create direct access expression: _match_value[i]
+                let array_access_expr = js::Expr::Member(js::MemberExpr {
+                    span: DUMMY_SP,
+                    obj: Box::new(js::Expr::Ident(state.mk_ident(match_var))),
+                    prop: js::MemberProp::Computed(js::ComputedPropName {
+                        span: DUMMY_SP,
+                        expr: Box::new(state.mk_num_lit(i as f64)),
+                    }),
+                });
+                
+                // Handle different pattern types for tuple elements
+                match elem_pat {
+                    Pat::Ident(pat_ident) => {
+                        // Simple variable binding: (a, b) => const a = _match_value[0]; const b = _match_value[1];
+                        let var_name = pat_ident.ident.to_string();
+                        let js_var_name = escape_js_identifier(&var_name);
+                        state.declare_variable(var_name, js_var_name.clone(), false);
+                        
+                        binding_stmts.push(state.mk_var_decl(
+                            &js_var_name,
+                            Some(array_access_expr),
+                            true,
+                        ));
+                        
+                        // Always matches for variable binding
+                        conditions.push(state.mk_bool_lit(true));
+                    }
+                    Pat::TupleStruct(tuple_struct) => {
+                        // Handle Some(token), None patterns in tuples
+                        if let Some(segment) = tuple_struct.path.segments.last() {
+                            if segment.ident == "Some" {
+                                // Check _match_value[i] !== null && _match_value[i] !== undefined
+                                let not_null = state.mk_binary_expr(
+                                    array_access_expr.clone(),
+                                    js::BinaryOp::NotEqEq,
+                                    state.mk_null_lit(),
+                                );
+                                let not_undefined = state.mk_binary_expr(
+                                    array_access_expr.clone(),
+                                    js::BinaryOp::NotEqEq,
+                                    state.mk_undefined(),
+                                );
+                                
+                                conditions.push(state.mk_binary_expr(
+                                    not_null, 
+                                    js::BinaryOp::LogicalAnd, 
+                                    not_undefined
+                                ));
+                                
+                                // If there's a variable binding inside Some(var)
+                                if let Some(inner_pat) = tuple_struct.elems.first() {
+                                    if let Pat::Ident(pat_ident) = inner_pat {
+                                        let var_name = pat_ident.ident.to_string();
+                                        let js_var_name = escape_js_identifier(&var_name);
+                                        state.declare_variable(var_name, js_var_name.clone(), false);
+                                        
+                                        binding_stmts.push(state.mk_var_decl(
+                                            &js_var_name,
+                                            Some(array_access_expr),
+                                            true,
+                                        ));
+                                    }
+                                }
+                            } else {
+                                // Handle other enum variants
+                                let elem_condition = state.mk_binary_expr(
+                                    state.mk_member_expr(array_access_expr, "type"),
+                                    js::BinaryOp::EqEqEq,
+                                    state.mk_str_lit(&segment.ident.to_string()),
+                                );
+                                conditions.push(elem_condition);
+                            }
+                        }
+                    }
+                    Pat::Path(path_pat) => {
+                        // Handle None patterns in tuples
+                        if let Some(segment) = path_pat.path.segments.last() {
+                            if segment.ident == "None" {
+                                // Check _match_value[i] === null || _match_value[i] === undefined
+                                let null_check = state.mk_binary_expr(
+                                    array_access_expr.clone(),
+                                    js::BinaryOp::EqEqEq,
+                                    state.mk_null_lit(),
+                                );
+                                let undefined_check = state.mk_binary_expr(
+                                    array_access_expr,
+                                    js::BinaryOp::EqEqEq,
+                                    state.mk_undefined(),
+                                );
+                                conditions.push(state.mk_binary_expr(
+                                    null_check, 
+                                    js::BinaryOp::LogicalOr, 
+                                    undefined_check
+                                ));
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(format!("Unsupported pattern in tuple: {:?}", elem_pat));
+                    }
+                }
+            }
+            
+            // Combine all conditions with AND
+            if conditions.is_empty() {
+                state.mk_bool_lit(true)
+            } else {
+                conditions.into_iter().reduce(|acc, cond| {
+                    state.mk_binary_expr(acc, js::BinaryOp::LogicalAnd, cond)
+                }).unwrap()
+            }
+        }
         x => panic!("Unsupported pattern {:?}", &x),
     };
 
