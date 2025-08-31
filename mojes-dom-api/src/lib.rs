@@ -724,6 +724,8 @@ pub struct Navigator {
     pub onLine: bool,
     pub appName: String,
     pub appVersion: String,
+    // WebRTC MediaDevices access as a property
+    pub mediaDevices: MediaDevices,
 }
 
 impl Navigator {
@@ -736,6 +738,7 @@ impl Navigator {
             onLine: true,
             appName: String::new(),
             appVersion: String::new(),
+            mediaDevices: MediaDevices,
         }
     }
 
@@ -748,6 +751,7 @@ impl Navigator {
             onLine: true,
             appName: "Rust Browser".to_string(),
             appVersion: "1.0".to_string(),
+            mediaDevices: MediaDevices,
         }
     }
 
@@ -759,10 +763,6 @@ impl Navigator {
         false
     }
 
-    // WebRTC MediaDevices access (property-style getter)
-    pub fn mediaDevices(&self) -> MediaDevices {
-        MediaDevices
-    }
 }
 
 // History interface
