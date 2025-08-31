@@ -3856,6 +3856,51 @@ fn handle_pattern_binding(
                 );
             }
         }
+        Pat::Struct(struct_pat) => {
+            // Handle struct-style enum variants: TestMessage::MessageOne { one } => { ... }
+            if let Some(segment) = struct_pat.path.segments.last() {
+                let variant_name = segment.ident.to_string();
+                
+                // Generate condition: _match_value.type === 'MessageOne'
+                let type_check = state.mk_binary_expr(
+                    state.mk_member_expr(
+                        js::Expr::Ident(state.mk_ident(match_var)),
+                        "type"
+                    ),
+                    js::BinaryOp::EqEqEq,
+                    state.mk_str_lit(&variant_name),
+                );
+                
+                // Handle field binding for struct-style enum variants
+                for field_pat in &struct_pat.fields {
+                    if let syn::Member::Named(field_name) = &field_pat.member {
+                        if let Pat::Ident(pat_ident) = &*field_pat.pat {
+                            let var_name = pat_ident.ident.to_string();
+                            let js_var_name = escape_js_identifier(&var_name);
+                            let field_name_str = field_name.to_string();
+                            
+                            state.declare_variable(var_name, js_var_name.clone(), false);
+                            
+                            // Generate: const one = _match_value.one;
+                            binding_stmts.push(state.mk_var_decl(
+                                &js_var_name,
+                                Some(state.mk_member_expr(
+                                    js::Expr::Ident(state.mk_ident(match_var)),
+                                    &field_name_str
+                                )),
+                                true,
+                            ));
+                        } else {
+                            panic!("Complex patterns in struct fields not yet supported: {:?}", field_pat.pat);
+                        }
+                    }
+                }
+                
+                type_check
+            } else {
+                panic!("Invalid struct pattern path: {:?}", struct_pat.path);
+            }
+        }
         x => panic!("Unsupported pattern {:?}", &x),
     };
 

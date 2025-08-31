@@ -428,6 +428,104 @@ fn test_custom_enum_mixed_patterns_javascript_evaluation() {
     assert_eq!(result.as_string().unwrap(), "other: 999");
 }
 
+// ==================== STRUCT-STYLE ENUM PATTERN MATCHING ====================
+#[test]
+fn test_struct_style_enum_pattern_matching() {
+    // Test struct-style enum patterns like TestMessage::MessageOne { one }
+    let expr: Expr = parse_quote! {
+        match msg {
+            TestMessage::MessageOne { one } => format!("One: {}", one),
+            TestMessage::MessageTwo { x, y } => format!("Two: {} {}", x, y),
+            TestMessage::Offer { target, offer } => format!("Offer for {}", target),
+        }
+    };
+
+    let js_code = rust_expr_to_js(&expr);
+    println!("DEBUG test_struct_style_enum_pattern_matching js code: {}", &js_code);
+    
+    // Should generate type checks for each variant
+    assert!(js_code.contains("_match_value.type === \"MessageOne\""));
+    assert!(js_code.contains("_match_value.type === \"MessageTwo\""));
+    assert!(js_code.contains("_match_value.type === \"Offer\""));
+    
+    // Should generate field binding for MessageOne
+    assert!(js_code.contains("const one = _match_value.one"));
+    
+    // Should generate field binding for MessageTwo
+    assert!(js_code.contains("const x = _match_value.x"));
+    assert!(js_code.contains("const y = _match_value.y"));
+    
+    // Should generate field binding for Offer
+    assert!(js_code.contains("const target = _match_value.target"));
+    assert!(js_code.contains("const offer = _match_value.offer"));
+}
+
+#[test] 
+fn test_struct_style_enum_javascript_evaluation() {
+    // Test that struct-style enum patterns work correctly with actual JavaScript execution
+    let expr: Expr = parse_quote! {
+        match msg {
+            TestMessage::MessageOne { one } => format!("Got: {}", one),
+            TestMessage::MessageTwo { x, y } => format!("Coords: {},{}", x, y),
+        }
+    };
+
+    let js_code = rust_expr_to_js(&expr);
+    println!("DEBUG test_struct_style_enum_javascript_evaluation js code: {}", &js_code);
+    
+    // Test MessageOne variant - struct-style enum should have named fields
+    let test_code_one = format!(
+        r#"
+        const msg = {{ type: "MessageOne", one: "hello world" }};
+        {}
+        "#, 
+        js_code
+    );
+    
+    let result_one = eval_js(&test_code_one).unwrap();
+    assert_eq!(result_one.as_string().unwrap(), "Got: hello world");
+    
+    // Test MessageTwo variant 
+    let test_code_two = format!(
+        r#"
+        const msg = {{ type: "MessageTwo", x: 100, y: 200 }};
+        {}
+        "#, 
+        js_code
+    );
+    
+    let result_two = eval_js(&test_code_two).unwrap();
+    assert_eq!(result_two.as_string().unwrap(), "Coords: 100,200");
+}
+
+#[test]
+fn test_mixed_tuple_and_struct_enum_patterns() {
+    // Test mixing tuple-style and struct-style enum patterns
+    let expr: Expr = parse_quote! {
+        match value {
+            Command::Stop => "stopped",
+            Command::Move(x, y) => format!("moved {},{}", x, y),  // tuple style
+            Command::Resize { width, height } => format!("resized {}x{}", width, height), // struct style
+        }
+    };
+
+    let js_code = rust_expr_to_js(&expr);
+    println!("DEBUG test_mixed_tuple_and_struct_enum_patterns js code: {}", &js_code);
+    
+    // Should handle unit variant
+    assert!(js_code.contains("_match_value === \"Stop\""));
+    
+    // Should handle tuple-style variant (using value0, value1)
+    assert!(js_code.contains("_match_value.type === \"Move\""));
+    assert!(js_code.contains("const x = _match_value.value0"));
+    assert!(js_code.contains("const y = _match_value.value1"));
+    
+    // Should handle struct-style variant (using named fields)
+    assert!(js_code.contains("_match_value.type === \"Resize\""));
+    assert!(js_code.contains("const width = _match_value.width"));
+    assert!(js_code.contains("const height = _match_value.height"));
+}
+
 // ==================== NESTED OPTION MATCHING ====================
 #[test]
 fn test_nested_option_match() {
