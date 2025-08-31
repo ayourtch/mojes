@@ -20,6 +20,8 @@ pub struct TranspilerState {
     warnings: Vec<String>,
     /// Counter for generating unique temporary variable names
     temp_var_counter: usize,
+    /// Current struct name for Self resolution
+    current_struct_name: Option<String>,
 }
 
 #[derive(Copy, Eq, PartialEq, Clone, Debug)]
@@ -43,7 +45,18 @@ impl TranspilerState {
             errors: Vec::new(),
             warnings: Vec::new(),
             temp_var_counter: 0,
+            current_struct_name: None,
         }
+    }
+
+    /// Set the current struct name for Self resolution
+    pub fn set_current_struct_name(&mut self, name: Option<String>) {
+        self.current_struct_name = name;
+    }
+
+    /// Get the current struct name
+    pub fn get_current_struct_name(&self) -> Option<&String> {
+        self.current_struct_name.as_ref()
     }
     /// Convert Pat to Param for function parameters
     pub fn pat_to_param(&self, pat: js::Pat) -> js::Param {
@@ -370,6 +383,9 @@ pub fn generate_js_methods_for_impl_with_state(
     } else {
         return Err("Invalid impl type".to_string());
     };
+
+    // Set the current struct name for Self resolution
+    state.set_current_struct_name(Some(struct_name.clone()));
 
     let mut js_items = Vec::new();
 
@@ -1142,6 +1158,15 @@ pub fn rust_expr_to_js_with_action_and_state(
 
                 match ident_str.as_str() {
                     "self" => Ok(state.mk_this_expr()),
+                    "Self" => {
+                        // Replace Self with the current struct name
+                        if let Some(struct_name) = state.get_current_struct_name() {
+                            Ok(js::Expr::Ident(state.mk_ident(struct_name)))
+                        } else {
+                            // Fallback to "Self" if no struct context
+                            Ok(js::Expr::Ident(state.mk_ident("Self")))
+                        }
+                    },
                     "None" => Ok(state.mk_null_lit()),
                     "true" | "false" => Ok(js::Expr::Ident(state.mk_ident(&ident_str))),
                     _ => {
@@ -1814,21 +1839,51 @@ fn handle_function_call(
 
                 // Handle constructor calls (Type::new)
                 if method_name == "new" {
-                    return Ok(js::Expr::New(js::NewExpr {
-                        span: DUMMY_SP,
-                        callee: Box::new(js::Expr::Ident(state.mk_ident(&type_name))),
-                        args: Some(
-                            js_args
-                                .into_iter()
-                                .map(|expr| js::ExprOrSpread {
-                                    spread: None,
-                                    expr: Box::new(expr),
-                                })
-                                .collect(),
-                        ),
-                        type_args: None,
-                        ctxt: SyntaxContext::empty(),
-                    }));
+                    // Handle special Rust types that should become JS equivalents
+                    match type_name.as_str() {
+                        "HashMap" | "BTreeMap" => {
+                            // HashMap::new() or BTreeMap::new() becomes {}
+                            return Ok(js::Expr::Object(js::ObjectLit {
+                                span: DUMMY_SP,
+                                props: vec![],
+                            }));
+                        }
+                        "Vec" => {
+                            // Vec::new() becomes []
+                            return Ok(js::Expr::Array(js::ArrayLit {
+                                span: DUMMY_SP,
+                                elems: vec![],
+                            }));
+                        }
+                        "Self" => {
+                            // Self::new() in struct context should use object literal pattern
+                            if let Some(current_struct) = state.get_current_struct_name() {
+                                // Instead of new Constructor(), create object literal
+                                return Ok(js::Expr::Object(js::ObjectLit {
+                                    span: DUMMY_SP,
+                                    props: vec![],
+                                }));
+                            }
+                        }
+                        _ => {
+                            // Regular constructor call
+                            return Ok(js::Expr::New(js::NewExpr {
+                                span: DUMMY_SP,
+                                callee: Box::new(js::Expr::Ident(state.mk_ident(&type_name))),
+                                args: Some(
+                                    js_args
+                                        .into_iter()
+                                        .map(|expr| js::ExprOrSpread {
+                                            spread: None,
+                                            expr: Box::new(expr),
+                                        })
+                                        .collect(),
+                                ),
+                                type_args: None,
+                                ctxt: SyntaxContext::empty(),
+                            }));
+                        }
+                    }
                 }
 
                 // Handle other static methods (Type::method)
@@ -4318,34 +4373,61 @@ fn handle_struct_expr(
             props,
         }))
     } else {
-        // This is a regular struct, use constructor pattern
-        // Convert field initializers to constructor arguments
-        let args: Result<Vec<_>, _> = struct_expr
-            .fields
-            .iter()
-            .map(|field| rust_expr_to_js_with_state(&field.expr, state))
-            .collect();
+        // Check if this is a Self struct expression
+        if struct_name == "Self" && state.get_current_struct_name().is_some() {
+            // Self { ... } should create an object literal with named fields
+            let mut props = Vec::new();
+            
+            // Convert named fields to object properties
+            for field in &struct_expr.fields {
+                if let syn::Member::Named(field_name) = &field.member {
+                    let field_name_str = field_name.to_string();
+                    let field_value = rust_expr_to_js_with_state(&field.expr, state)?;
+                    
+                    props.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+                        js::KeyValueProp {
+                            key: js::PropName::Ident(state.mk_ident_name(&field_name_str)),
+                            value: Box::new(field_value),
+                        },
+                    ))));
+                }
+            }
+            
+            // Return object literal for Self
+            Ok(js::Expr::Object(js::ObjectLit {
+                span: DUMMY_SP,
+                props,
+            }))
+        } else {
+            // This is a regular struct, use original constructor pattern
+            // Convert field initializers to constructor arguments
+            let args: Result<Vec<_>, _> = struct_expr
+                .fields
+                .iter()
+                .map(|field| rust_expr_to_js_with_state(&field.expr, state))
+                .collect();
 
-        let js_args = args?;
+            let js_args = args?;
 
-        // Create new constructor call
-        let constructor = js::Expr::Ident(state.mk_ident(&struct_name));
+            // Create new constructor call
+            let constructor = js::Expr::Ident(state.mk_ident(&struct_name));
 
-        Ok(js::Expr::New(js::NewExpr {
-            span: DUMMY_SP,
-            callee: Box::new(constructor),
-            args: Some(
-                js_args
-                    .into_iter()
-                    .map(|expr| js::ExprOrSpread {
-                        spread: None,
-                        expr: Box::new(expr),
-                    })
-                    .collect(),
-            ),
-            type_args: None,
-            ctxt: SyntaxContext::empty(),
-        }))
+            Ok(js::Expr::New(js::NewExpr {
+                span: DUMMY_SP,
+                callee: Box::new(constructor),
+                args: Some(
+                    js_args
+                        .into_iter()
+                        .map(|expr| js::ExprOrSpread {
+                            spread: None,
+                            expr: Box::new(expr),
+                        })
+                        .collect(),
+                ),
+                type_args: None,
+                ctxt: SyntaxContext::empty(),
+            }))
+        }
     }
 }
 
