@@ -4216,7 +4216,8 @@ fn handle_match_expr(
 
     for (i, arm) in match_expr.arms.iter().enumerate() {
         let (condition, mut binding_stmts) = handle_pattern_binding(&arm.pat, &temp_var, state)?;
-        let body_expr = rust_expr_to_js_with_state(&arm.body, state)?;
+        // Use BlockAction::Return so that final expressions in match arms are properly returned
+        let body_expr = rust_expr_to_js_with_action_and_state(BlockAction::Return, &arm.body, state)?;
 
         // Combine binding statements with return statement
         binding_stmts.push(state.mk_return_stmt(Some(body_expr)));

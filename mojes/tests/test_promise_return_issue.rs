@@ -141,4 +141,23 @@ mod tests {
     fn test_promise_return_patterns() {
         demonstrate_promise_return_issue();
     }
+    
+    #[test]
+    fn test_show_actual_transpiled_javascript() {
+        println!("=== ACTUAL TRANSPILED JAVASCRIPT FROM MOJES ===\n");
+        
+        println!("Generated JavaScript functions:");
+        for (i, js_code) in JS.iter().enumerate() {
+            println!("--- Function {} ---", i + 1);
+            println!("{}", js_code);
+            println!();
+        }
+        
+        println!("=== ANALYSIS ===");
+        println!("Look at the above JavaScript to see:");
+        println!("1. How match expressions with implicit returns are transpiled");
+        println!("2. Whether 'return' statements are properly generated");  
+        println!("3. How Promise constructors are handled");
+        println!("4. If there are any missing return statements that would cause undefined");
+    }
 }
