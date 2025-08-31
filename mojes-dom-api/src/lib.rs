@@ -2,7 +2,7 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
 
-use mojes_derive::js_type;
+use mojes_derive::{js_type, js_object};
 
 // JavaScript Promise type
 #[js_type]
@@ -1801,6 +1801,7 @@ impl WebSocket {
 // =============================================================================
 
 // Core WebRTC Configuration Types
+#[js_type]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RTCIceServer {
     pub urls: Vec<String>,
@@ -1809,6 +1810,7 @@ pub struct RTCIceServer {
     pub credential_type: Option<String>, // "password", "oauth"
 }
 
+#[js_object]
 impl RTCIceServer {
     pub fn new(urls: Vec<String>) -> Self {
         Self {
@@ -1829,6 +1831,7 @@ impl RTCIceServer {
     }
 }
 
+#[js_type]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RTCConfiguration {
     pub ice_servers: Vec<RTCIceServer>,
@@ -1837,6 +1840,7 @@ pub struct RTCConfiguration {
     pub rtcp_mux_policy: Option<String>, // "negotiate", "require"
 }
 
+#[js_object]
 impl RTCConfiguration {
     pub fn new() -> Self {
         Self {
