@@ -23,8 +23,7 @@ impl<T> MojesMethods<T> for HashMap<String, T> {
     }
 }
 
-// JavaScript Promise type
-#[js_type]
+// JavaScript Promise type - NOT exposed to JS, uses native Promise
 #[derive(Debug, Clone)]
 pub struct Promise<T> {
     _phantom: std::marker::PhantomData<T>,
@@ -32,6 +31,20 @@ pub struct Promise<T> {
 
 impl<T> Promise<T> {
     pub fn new() -> Self {
+        Self {
+            _phantom: std::marker::PhantomData,
+        }
+    }
+    
+    pub fn resolve(value: T) -> Self {
+        println!("Promise.resolve() called");
+        Self {
+            _phantom: std::marker::PhantomData,
+        }
+    }
+    
+    pub fn reject(_reason: String) -> Self {
+        println!("Promise.reject() called");
         Self {
             _phantom: std::marker::PhantomData,
         }
