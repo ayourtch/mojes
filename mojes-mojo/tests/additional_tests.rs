@@ -547,7 +547,7 @@ fn test_enum_json_generation() {
     
     // Should generate JSON methods on the enum object
     assert!(js_code.contains("fromJSON"));
-    assert!(js_code.contains("TestMessage_toJSON"));
+    assert!(js_code.contains("toJSON"));
 }
 
 #[test]
@@ -598,13 +598,13 @@ fn test_enum_json_deserialization_logic() {
     
     // Should handle tuple variants in fromJSON
     assert!(js_code.contains("case \"Move\""));
-    assert!(js_code.contains("json.value0"));
-    assert!(js_code.contains("json.value1"));
+    assert!(js_code.contains("parsed.value0"));
+    assert!(js_code.contains("parsed.value1"));
     
     // Should handle struct variants in fromJSON
     assert!(js_code.contains("case \"Resize\""));
-    assert!(js_code.contains("json.width"));
-    assert!(js_code.contains("json.height"));
+    assert!(js_code.contains("parsed.width"));
+    assert!(js_code.contains("parsed.height"));
 }
 
 #[test] 
@@ -628,7 +628,7 @@ fn test_enum_json_with_javascript_evaluation() {
         // Create a tuple variant instance
         const msg = {{ type: "Text", value0: "hello world" }};
         // Test toJSON method
-        const json = Message_toJSON(msg);
+        const json = Message.toJSON(msg);
         JSON.stringify(json);
         "#, 
         js_code
@@ -647,7 +647,7 @@ fn test_enum_json_with_javascript_evaluation() {
         // Create a struct variant instance
         const msg = {{ type: "Data", content: "important", priority: 1 }};
         // Test toJSON method
-        const json = Message_toJSON(msg);
+        const json = Message.toJSON(msg);
         JSON.stringify(json);
         "#, 
         js_code
@@ -685,7 +685,7 @@ fn test_enum_json_roundtrip() {
         const original = {{ type: "Add", value0: 5, value1: 10 }};
         
         // Serialize to JSON
-        const jsonData = Operation_toJSON(original);
+        const jsonData = Operation.toJSON(original);
         const jsonString = JSON.stringify(jsonData);
         
         // Deserialize back
@@ -714,7 +714,7 @@ fn test_enum_json_roundtrip() {
         const original = {{ type: "Multiply", x: 3, y: 4 }};
         
         // Serialize to JSON
-        const jsonData = Operation_toJSON(original);
+        const jsonData = Operation.toJSON(original);
         const jsonString = JSON.stringify(jsonData);
         
         // Deserialize back
