@@ -1808,10 +1808,9 @@ impl WebSocket {
         Ok(Self { url: url.to_string() })
     }
 
-    pub fn send(&self, data: &str) -> Result<(), String> {
+    pub fn send(&self, data: &str) {
         // Mock implementation for transpilation
         println!("WebSocket.send: {}", data);
-        Ok(())
     }
 
     pub fn close(&self) {
