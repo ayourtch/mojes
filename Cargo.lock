@@ -959,6 +959,7 @@ dependencies = [
  "mojes-derive",
  "mojes-dom-api",
  "mojes-mojo",
+ "serde_json",
 ]
 
 [[package]]

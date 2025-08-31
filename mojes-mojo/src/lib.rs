@@ -4074,15 +4074,35 @@ fn handle_pattern_binding(
                     // Handle generic enum variants with data - e.g., TestMessage::MessageOne(s)
                     let variant_name = segment.ident.to_string();
                     
-                    // Generate condition: _match_value.type === 'MessageOne'
-                    let type_check = state.mk_binary_expr(
-                        state.mk_member_expr(
-                            js::Expr::Ident(state.mk_ident(match_var)),
-                            "type"
-                        ),
-                        js::BinaryOp::EqEqEq,
-                        state.mk_str_lit(&variant_name),
-                    );
+                    // Special case for Result<T,E> patterns: Ok/Err should use legacy format
+                    let (condition_field, data_field) = match variant_name.as_str() {
+                        "Ok" => ("ok", "ok"),
+                        "Err" => ("error", "error"), 
+                        _ => ("type", "value0"), // Generic enum pattern
+                    };
+                    
+                    // Generate condition based on the pattern type
+                    let type_check = if variant_name == "Ok" || variant_name == "Err" {
+                        // For Result patterns: check _match_value.ok !== undefined or _match_value.error !== undefined
+                        state.mk_binary_expr(
+                            state.mk_member_expr(
+                                js::Expr::Ident(state.mk_ident(match_var)),
+                                condition_field
+                            ),
+                            js::BinaryOp::NotEqEq,
+                            state.mk_undefined(),
+                        )
+                    } else {
+                        // For generic enums: _match_value.type === 'VariantName'
+                        state.mk_binary_expr(
+                            state.mk_member_expr(
+                                js::Expr::Ident(state.mk_ident(match_var)),
+                                "type"
+                            ),
+                            js::BinaryOp::EqEqEq,
+                            state.mk_str_lit(&variant_name),
+                        )
+                    };
                     
                     // Handle parameter binding for enum variant data
                     for (i, inner_pat) in tuple_struct.elems.iter().enumerate() {
@@ -4092,8 +4112,15 @@ fn handle_pattern_binding(
                                 let js_var_name = escape_js_identifier(&var_name);
                                 state.declare_variable(var_name, js_var_name.clone(), false);
                                 
-                                // Generate: const s = _match_value.value0;
-                                let field_name = format!("value{}", i);
+                                // Generate appropriate field access based on pattern type
+                                let field_name = if variant_name == "Ok" || variant_name == "Err" {
+                                    // For Result patterns: use data_field (ok/error)
+                                    data_field.to_string()
+                                } else {
+                                    // For generic enums: use value0, value1, etc.
+                                    format!("value{}", i)
+                                };
+                                
                                 binding_stmts.push(state.mk_var_decl(
                                     &js_var_name,
                                     Some(state.mk_member_expr(

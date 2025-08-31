@@ -191,6 +191,120 @@ Current Issues Observed:
 This creates inconsistency where JavaScript code expects .type === "Ok" but gets different object shapes.
 */
 
+// Custom enums to test if the pattern is general or Result-specific
+#[js_type]
+#[derive(Debug, Clone)]
+pub enum CustomResult {
+    Success(String),
+    Failure(String),
+}
+
+#[js_type] 
+#[derive(Debug, Clone)]
+pub enum Status {
+    Active,
+    Inactive(String),
+    Pending(i32, String),
+}
+
+#[js_type]
+#[derive(Debug, Clone)]
+pub enum Message {
+    Text { content: String },
+    Image { url: String, alt: String },
+}
+
+// Test functions using custom enums
+#[to_js]
+fn test_custom_result_patterns() -> CustomResult {
+    if true {
+        CustomResult::Success("worked".to_string())
+    } else {
+        CustomResult::Failure("failed".to_string())
+    }
+}
+
+#[to_js]
+fn test_status_patterns(active: bool) -> Status {
+    if active {
+        Status::Active
+    } else {
+        Status::Inactive("reason".to_string())
+    }
+}
+
+#[to_js]
+fn test_status_pending() -> Status {
+    Status::Pending(42, "waiting".to_string())
+}
+
+#[to_js]
+fn test_message_patterns(is_text: bool) -> Message {
+    if is_text {
+        Message::Text { content: "hello".to_string() }
+    } else {
+        Message::Image { url: "pic.jpg".to_string(), alt: "picture".to_string() }
+    }
+}
+
+// Direct enum construction tests
+#[to_js]
+fn test_direct_custom_enum_construction() {
+    println!("Testing direct custom enum construction...");
+    
+    // Custom Result enum
+    let success = CustomResult::Success("direct success".to_string());
+    println!("CustomResult::Success: {:?}", success);
+    
+    let failure = CustomResult::Failure("direct failure".to_string());
+    println!("CustomResult::Failure: {:?}", failure);
+    
+    // Status enum
+    let active = Status::Active;
+    println!("Status::Active: {:?}", active);
+    
+    let inactive = Status::Inactive("offline".to_string());
+    println!("Status::Inactive: {:?}", inactive);
+    
+    let pending = Status::Pending(99, "processing".to_string());
+    println!("Status::Pending: {:?}", pending);
+    
+    // Message enum
+    let text = Message::Text { content: "direct text".to_string() };
+    println!("Message::Text: {:?}", text);
+    
+    let image = Message::Image { url: "direct.jpg".to_string(), alt: "direct image".to_string() };
+    println!("Message::Image: {:?}", image);
+}
+
+#[to_js]
+fn test_match_on_custom_enums() {
+    println!("Testing match on custom enums...");
+    
+    let result = CustomResult::Success("matched".to_string());
+    match result {
+        CustomResult::Success(msg) => {
+            println!("Matched Success: {}", msg);
+        }
+        CustomResult::Failure(err) => {
+            println!("Matched Failure: {}", err);
+        }
+    }
+    
+    let status = Status::Pending(10, "waiting".to_string());
+    match status {
+        Status::Active => {
+            println!("Status is Active");
+        }
+        Status::Inactive(reason) => {
+            println!("Status is Inactive: {}", reason);
+        }
+        Status::Pending(count, msg) => {
+            println!("Status is Pending: {} - {}", count, msg);
+        }
+    }
+}
+
 #[test]
 fn test_generated_javascript() {
     // Test that we can access the generated JavaScript code
@@ -201,4 +315,23 @@ fn test_generated_javascript() {
     
     // Basic sanity check - should have some JavaScript generated
     assert!(!JS.is_empty(), "No JavaScript code was generated");
+}
+
+#[test]
+fn test_enum_pattern_consistency() {
+    println!("Testing enum pattern consistency...");
+    
+    // This test will show if the transpilation patterns are:
+    // 1. Result-specific: Ok/Err get special treatment
+    // 2. General tagged enum: All enums follow same { type: "Variant", value0: ... } pattern
+    // 3. Mixed: Different patterns for different enum types
+    
+    println!("Check the JS output above to see if:");
+    println!("- Result<T,E> uses {{ ok: ... }} / {{ error: ... }}");
+    println!("- CustomResult uses {{ Success: ... }} / {{ Failure: ... }}"); 
+    println!("- Status uses {{ Active: ... }} / {{ Inactive: ... }} / {{ Pending: ... }}");
+    println!("- OR if they all use {{ type: \"Variant\", value0: ... }} format");
+    
+    // The actual pattern will be visible in the generated JavaScript
+    assert!(!JS.is_empty());
 }

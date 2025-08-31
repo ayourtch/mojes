@@ -11,3 +11,4 @@ mojes-derive = { path = "../mojes-derive" }
 mojes-mojo = { path = "../mojes-mojo" }
 mojes-dom-api = { path = "../mojes-dom-api" }
 linkme = "0.3"
+serde_json = "1.0"
