@@ -3041,6 +3041,37 @@ pub fn generate_js_enum_with_state(input_enum: &ItemEnum) -> Result<Vec<js::Modu
         is_function_decl,
     ))));
 
+    // Create JSON methods for the enum
+    let to_json_method = create_enum_to_json_method(input_enum, &mut state)?;
+    let from_json_method = create_enum_from_json_static_method(input_enum, &mut state)?;
+
+    // Create a class with the JSON methods 
+    let class_name = format!("{}JSON", enum_name);
+    let json_class = js::Class {
+        span: DUMMY_SP,
+        decorators: vec![],
+        body: vec![
+            js::ClassMember::Method(to_json_method),
+            js::ClassMember::Method(from_json_method),
+        ],
+        super_class: None,
+        is_abstract: false,
+        type_params: None,
+        super_type_params: None,
+        implements: vec![],
+        ctxt: SyntaxContext::empty(),
+    };
+
+    let json_class_decl = js::ClassDecl {
+        ident: state.mk_ident(&class_name),
+        declare: false,
+        class: Box::new(json_class),
+    };
+
+    items.push(js::ModuleItem::Stmt(js::Stmt::Decl(js::Decl::Class(
+        json_class_decl,
+    ))));
+
     Ok(items)
 }
 
@@ -4570,6 +4601,289 @@ pub fn generate_js_class_for_struct(input_struct: &ItemStruct) -> String {
         .expect("Failed to generate JavaScript class for struct");
 
     ast_to_code(&[module_item]).expect("Failed to convert struct AST to JavaScript code")
+}
+
+// Helper function to create enum toJSON method
+fn create_enum_to_json_method(
+    input_enum: &ItemEnum,
+    state: &mut TranspilerState,
+) -> Result<js::ClassMethod, String> {
+    // Create switch expression that handles all enum variants
+    let mut switch_cases = Vec::new();
+    
+    for variant in &input_enum.variants {
+        let variant_name = variant.ident.to_string();
+        
+        match &variant.fields {
+            Fields::Unit => {
+                // Unit variants: return just the string
+                let return_stmt = state.mk_return_stmt(Some(state.mk_str_lit(&variant_name)));
+                switch_cases.push(js::SwitchCase {
+                    span: DUMMY_SP,
+                    test: Some(Box::new(state.mk_str_lit(&variant_name))),
+                    cons: vec![return_stmt],
+                });
+            }
+            Fields::Unnamed(fields) => {
+                // Tuple variants: return object with type and value0, value1, etc.
+                let mut props = vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+                    js::KeyValueProp {
+                        key: js::PropName::Ident(state.mk_ident_name("type")),
+                        value: Box::new(state.mk_str_lit(&variant_name)),
+                    },
+                )))];
+                
+                for i in 0..fields.unnamed.len() {
+                    let field_name = format!("value{}", i);
+                    props.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+                        js::KeyValueProp {
+                            key: js::PropName::Ident(state.mk_ident_name(&field_name)),
+                            value: Box::new(state.mk_member_expr(
+                                js::Expr::This(js::ThisExpr { span: DUMMY_SP }),
+                                &field_name
+                            )),
+                        },
+                    ))));
+                }
+                
+                let obj = js::Expr::Object(js::ObjectLit {
+                    span: DUMMY_SP,
+                    props,
+                });
+                
+                let return_stmt = state.mk_return_stmt(Some(obj));
+                switch_cases.push(js::SwitchCase {
+                    span: DUMMY_SP,
+                    test: Some(Box::new(state.mk_str_lit(&variant_name))),
+                    cons: vec![return_stmt],
+                });
+            }
+            Fields::Named(fields) => {
+                // Struct variants: return object with type and named fields
+                let mut props = vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+                    js::KeyValueProp {
+                        key: js::PropName::Ident(state.mk_ident_name("type")),
+                        value: Box::new(state.mk_str_lit(&variant_name)),
+                    },
+                )))];
+                
+                for field in &fields.named {
+                    if let Some(field_name) = &field.ident {
+                        let field_name_str = field_name.to_string();
+                        props.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+                            js::KeyValueProp {
+                                key: js::PropName::Ident(state.mk_ident_name(&field_name_str)),
+                                value: Box::new(state.mk_member_expr(
+                                    js::Expr::This(js::ThisExpr { span: DUMMY_SP }),
+                                    &field_name_str
+                                )),
+                            },
+                        ))));
+                    }
+                }
+                
+                let obj = js::Expr::Object(js::ObjectLit {
+                    span: DUMMY_SP,
+                    props,
+                });
+                
+                let return_stmt = state.mk_return_stmt(Some(obj));
+                switch_cases.push(js::SwitchCase {
+                    span: DUMMY_SP,
+                    test: Some(Box::new(state.mk_str_lit(&variant_name))),
+                    cons: vec![return_stmt],
+                });
+            }
+        }
+    }
+    
+    // Create switch statement: switch(this.type || this) { ... }
+    let discriminant = js::Expr::Bin(js::BinExpr {
+        span: DUMMY_SP,
+        op: js::BinaryOp::LogicalOr,
+        left: Box::new(state.mk_member_expr(
+            js::Expr::This(js::ThisExpr { span: DUMMY_SP }),
+            "type"
+        )),
+        right: Box::new(js::Expr::This(js::ThisExpr { span: DUMMY_SP })),
+    });
+    
+    let switch_stmt = js::Stmt::Switch(js::SwitchStmt {
+        span: DUMMY_SP,
+        discriminant: Box::new(discriminant),
+        cases: switch_cases,
+    });
+    
+    let method_body = js::BlockStmt {
+        span: DUMMY_SP,
+        stmts: vec![switch_stmt],
+        ctxt: SyntaxContext::empty(),
+    };
+
+    Ok(js::ClassMethod {
+        span: DUMMY_SP,
+        key: js::PropName::Ident(state.mk_ident_name("toJSON")),
+        function: Box::new(js::Function {
+            params: vec![],
+            decorators: vec![],
+            span: DUMMY_SP,
+            body: Some(method_body),
+            is_generator: false,
+            is_async: false,
+            type_params: None,
+            return_type: None,
+            ctxt: SyntaxContext::empty(),
+        }),
+        kind: js::MethodKind::Method,
+        is_static: false,
+        accessibility: None,
+        is_abstract: false,
+        is_optional: false,
+        is_override: false,
+    })
+}
+
+// Helper function to create enum fromJSON static method  
+fn create_enum_from_json_static_method(
+    input_enum: &ItemEnum,
+    state: &mut TranspilerState,
+) -> Result<js::ClassMethod, String> {
+    // Create switch cases for each variant
+    let mut switch_cases = Vec::new();
+    
+    for variant in &input_enum.variants {
+        let variant_name = variant.ident.to_string();
+        
+        match &variant.fields {
+            Fields::Unit => {
+                // Unit variants: just return the string
+                let return_stmt = state.mk_return_stmt(Some(state.mk_str_lit(&variant_name)));
+                switch_cases.push(js::SwitchCase {
+                    span: DUMMY_SP,
+                    test: Some(Box::new(state.mk_str_lit(&variant_name))),
+                    cons: vec![return_stmt],
+                });
+            }
+            Fields::Unnamed(fields) => {
+                // Tuple variants: create object with type and value0, value1, etc.
+                let mut props = vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+                    js::KeyValueProp {
+                        key: js::PropName::Ident(state.mk_ident_name("type")),
+                        value: Box::new(state.mk_str_lit(&variant_name)),
+                    },
+                )))];
+                
+                for i in 0..fields.unnamed.len() {
+                    let field_name = format!("value{}", i);
+                    props.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+                        js::KeyValueProp {
+                            key: js::PropName::Ident(state.mk_ident_name(&field_name)),
+                            value: Box::new(state.mk_member_expr(
+                                js::Expr::Ident(state.mk_ident("json")),
+                                &field_name
+                            )),
+                        },
+                    ))));
+                }
+                
+                let obj = js::Expr::Object(js::ObjectLit {
+                    span: DUMMY_SP,
+                    props,
+                });
+                
+                let return_stmt = state.mk_return_stmt(Some(obj));
+                switch_cases.push(js::SwitchCase {
+                    span: DUMMY_SP,
+                    test: Some(Box::new(state.mk_str_lit(&variant_name))),
+                    cons: vec![return_stmt],
+                });
+            }
+            Fields::Named(fields) => {
+                // Struct variants: create object with type and named fields
+                let mut props = vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+                    js::KeyValueProp {
+                        key: js::PropName::Ident(state.mk_ident_name("type")),
+                        value: Box::new(state.mk_str_lit(&variant_name)),
+                    },
+                )))];
+                
+                for field in &fields.named {
+                    if let Some(field_name) = &field.ident {
+                        let field_name_str = field_name.to_string();
+                        props.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+                            js::KeyValueProp {
+                                key: js::PropName::Ident(state.mk_ident_name(&field_name_str)),
+                                value: Box::new(state.mk_member_expr(
+                                    js::Expr::Ident(state.mk_ident("json")),
+                                    &field_name_str
+                                )),
+                            },
+                        ))));
+                    }
+                }
+                
+                let obj = js::Expr::Object(js::ObjectLit {
+                    span: DUMMY_SP,
+                    props,
+                });
+                
+                let return_stmt = state.mk_return_stmt(Some(obj));
+                switch_cases.push(js::SwitchCase {
+                    span: DUMMY_SP,
+                    test: Some(Box::new(state.mk_str_lit(&variant_name))),
+                    cons: vec![return_stmt],
+                });
+            }
+        }
+    }
+    
+    // Create switch statement: switch(json.type || json) { ... }
+    let discriminant = js::Expr::Bin(js::BinExpr {
+        span: DUMMY_SP,
+        op: js::BinaryOp::LogicalOr,
+        left: Box::new(state.mk_member_expr(
+            js::Expr::Ident(state.mk_ident("json")),
+            "type"
+        )),
+        right: Box::new(js::Expr::Ident(state.mk_ident("json"))),
+    });
+    
+    let switch_stmt = js::Stmt::Switch(js::SwitchStmt {
+        span: DUMMY_SP,
+        discriminant: Box::new(discriminant),
+        cases: switch_cases,
+    });
+    
+    let method_body = js::BlockStmt {
+        span: DUMMY_SP,
+        stmts: vec![switch_stmt],
+        ctxt: SyntaxContext::empty(),
+    };
+
+    Ok(js::ClassMethod {
+        span: DUMMY_SP,
+        key: js::PropName::Ident(state.mk_ident_name("fromJSON")),
+        function: Box::new(js::Function {
+            params: vec![state.pat_to_param(js::Pat::Ident(js::BindingIdent {
+                id: state.mk_ident("json"),
+                type_ann: None,
+            }))],
+            decorators: vec![],
+            span: DUMMY_SP,
+            body: Some(method_body),
+            is_generator: false,
+            is_async: false,
+            type_params: None,
+            return_type: None,
+            ctxt: SyntaxContext::empty(),
+        }),
+        kind: js::MethodKind::Method,
+        is_static: true,
+        accessibility: None,
+        is_abstract: false,
+        is_optional: false,
+        is_override: false,
+    })
 }
 
 /// Generate JavaScript enum (old API)

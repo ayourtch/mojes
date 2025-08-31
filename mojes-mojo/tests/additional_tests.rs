@@ -526,6 +526,217 @@ fn test_mixed_tuple_and_struct_enum_patterns() {
     assert!(js_code.contains("const height = _match_value.height"));
 }
 
+// ==================== ENUM JSON SERIALIZATION/DESERIALIZATION ====================
+#[test]
+fn test_enum_json_generation() {
+    // Test that the #[js_type] macro generates JSON methods for enums
+    let enum_def: ItemEnum = parse_quote! {
+        enum TestMessage {
+            MessageOne { one: String },
+            MessageTwo { x: i32, y: i32 },
+            Stop,
+        }
+    };
+
+    let js_code = generate_js_enum(&enum_def);
+    
+    println!("DEBUG test_enum_json_generation js code: {}", &js_code);
+    
+    // Should generate the enum factory object
+    assert!(js_code.contains("const TestMessage"));
+    
+    // Should generate JSON class with methods
+    assert!(js_code.contains("class TestMessageJSON"));
+    assert!(js_code.contains("toJSON"));
+    assert!(js_code.contains("fromJSON"));
+    assert!(js_code.contains("static fromJSON"));
+}
+
+#[test]
+fn test_enum_json_serialization_logic() {
+    // Test that the generated toJSON method contains correct switch logic
+    let enum_def: ItemEnum = parse_quote! {
+        enum Status {
+            Active,
+            Pending(String),
+            Complete { message: String, code: i32 },
+        }
+    };
+
+    let js_code = generate_js_enum(&enum_def);
+    
+    println!("DEBUG test_enum_json_serialization_logic js code: {}", &js_code);
+    
+    // Should handle unit variants
+    assert!(js_code.contains("\"Active\""));
+    
+    // Should handle tuple variants with type field
+    assert!(js_code.contains("type: \"Pending\""));
+    assert!(js_code.contains("value0"));
+    
+    // Should handle struct variants with named fields  
+    assert!(js_code.contains("type: \"Complete\""));
+    assert!(js_code.contains("message"));
+    assert!(js_code.contains("code"));
+}
+
+#[test]
+fn test_enum_json_deserialization_logic() {
+    // Test that the generated fromJSON method contains correct switch logic
+    let enum_def: ItemEnum = parse_quote! {
+        enum Command {
+            Stop,
+            Move(i32, i32),
+            Resize { width: i32, height: i32 },
+        }
+    };
+
+    let js_code = generate_js_enum(&enum_def);
+    
+    println!("DEBUG test_enum_json_deserialization_logic js code: {}", &js_code);
+    
+    // Should handle unit variants in fromJSON
+    assert!(js_code.contains("case \"Stop\""));
+    
+    // Should handle tuple variants in fromJSON
+    assert!(js_code.contains("case \"Move\""));
+    assert!(js_code.contains("json.value0"));
+    assert!(js_code.contains("json.value1"));
+    
+    // Should handle struct variants in fromJSON
+    assert!(js_code.contains("case \"Resize\""));
+    assert!(js_code.contains("json.width"));
+    assert!(js_code.contains("json.height"));
+}
+
+#[test] 
+fn test_enum_json_with_javascript_evaluation() {
+    // Test that the generated JSON methods actually work when executed
+    let enum_def: ItemEnum = parse_quote! {
+        enum Message {
+            Text(String),
+            Data { content: String, priority: i32 },
+        }
+    };
+
+    let js_code = generate_js_enum(&enum_def);
+    
+    println!("DEBUG test_enum_json_with_javascript_evaluation js code: {}", &js_code);
+    
+    // Test tuple variant serialization
+    let test_code_tuple = format!(
+        r#"
+        {}
+        // Create a tuple variant instance
+        const msg = {{ type: "Text", value0: "hello world" }};
+        // Test toJSON method
+        const json = MessageJSON.prototype.toJSON.call(msg);
+        JSON.stringify(json);
+        "#, 
+        js_code
+    );
+    
+    let result = eval_js(&test_code_tuple).unwrap();
+    let serialized = result.as_string().unwrap();
+    let serialized_str = format!("{:?}", serialized); // Convert to string for contains check
+    assert!(serialized_str.contains("Text"));
+    assert!(serialized_str.contains("hello world"));
+    
+    // Test struct variant serialization
+    let test_code_struct = format!(
+        r#"
+        {}
+        // Create a struct variant instance
+        const msg = {{ type: "Data", content: "important", priority: 1 }};
+        // Test toJSON method
+        const json = MessageJSON.prototype.toJSON.call(msg);
+        JSON.stringify(json);
+        "#, 
+        js_code
+    );
+    
+    let result = eval_js(&test_code_struct).unwrap();
+    let serialized = result.as_string().unwrap();
+    let serialized_str = format!("{:?}", serialized); // Convert to string for contains check
+    assert!(serialized_str.contains("Data"));
+    assert!(serialized_str.contains("important"));
+    assert!(serialized_str.contains("1"));
+}
+
+#[test]
+fn test_enum_json_roundtrip() {
+    // Test that we can serialize and deserialize enum values correctly
+    let enum_def: ItemEnum = parse_quote! {
+        enum Operation {
+            Add(i32, i32),
+            Multiply { x: i32, y: i32 },
+            Reset,
+        }
+    };
+
+    let js_code = generate_js_enum(&enum_def);
+    
+    println!("DEBUG test_enum_json_roundtrip js code: {}", &js_code);
+    
+    // Test roundtrip for tuple variant
+    let test_roundtrip_tuple = format!(
+        r#"
+        {}
+        
+        // Create original value
+        const original = {{ type: "Add", value0: 5, value1: 10 }};
+        
+        // Serialize to JSON
+        const jsonData = OperationJSON.prototype.toJSON.call(original);
+        const jsonString = JSON.stringify(jsonData);
+        
+        // Deserialize back
+        const parsed = JSON.parse(jsonString);
+        const restored = OperationJSON.fromJSON(parsed);
+        
+        // Check that it matches original structure
+        JSON.stringify(restored);
+        "#, 
+        js_code
+    );
+    
+    let result = eval_js(&test_roundtrip_tuple).unwrap();
+    let roundtrip = result.as_string().unwrap();
+    let roundtrip_str = format!("{:?}", roundtrip); // Convert to string for contains check  
+    assert!(roundtrip_str.contains("Add"));
+    assert!(roundtrip_str.contains("5"));
+    assert!(roundtrip_str.contains("10"));
+    
+    // Test roundtrip for struct variant
+    let test_roundtrip_struct = format!(
+        r#"
+        {}
+        
+        // Create original value
+        const original = {{ type: "Multiply", x: 3, y: 4 }};
+        
+        // Serialize to JSON
+        const jsonData = OperationJSON.prototype.toJSON.call(original);
+        const jsonString = JSON.stringify(jsonData);
+        
+        // Deserialize back
+        const parsed = JSON.parse(jsonString);
+        const restored = OperationJSON.fromJSON(parsed);
+        
+        // Check that it matches original structure
+        JSON.stringify(restored);
+        "#, 
+        js_code
+    );
+    
+    let result = eval_js(&test_roundtrip_struct).unwrap();
+    let roundtrip = result.as_string().unwrap();
+    let roundtrip_str = format!("{:?}", roundtrip); // Convert to string for contains check
+    assert!(roundtrip_str.contains("Multiply"));
+    assert!(roundtrip_str.contains("3"));
+    assert!(roundtrip_str.contains("4"));
+}
+
 // ==================== NESTED OPTION MATCHING ====================
 #[test]
 fn test_nested_option_match() {
