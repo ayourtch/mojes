@@ -77,6 +77,153 @@ pub fn Number(s: &str) -> f64 {
 
 // Core DOM Element representation
 // #[js_type]
+// DOMTokenList represents classList in the DOM API
+#[js_type]
+#[derive(Clone, Debug)]
+pub struct DOMTokenList {
+    pub classes: Vec<String>,
+}
+
+impl DOMTokenList {
+    pub fn new() -> Self {
+        Self {
+            classes: Vec::new(),
+        }
+    }
+    
+    pub fn from_class_string(class_string: &str) -> Self {
+        let classes = if class_string.trim().is_empty() {
+            Vec::new()
+        } else {
+            class_string.split_whitespace().map(String::from).collect()
+        };
+        Self { classes }
+    }
+    
+    // Add a class to the list
+    pub fn add(&mut self, class_name: &str) {
+        let class_name = class_name.trim();
+        if !class_name.is_empty() && !self.classes.contains(&class_name.to_string()) {
+            self.classes.push(class_name.to_string());
+        }
+    }
+    
+    // Remove a class from the list
+    pub fn remove(&mut self, class_name: &str) {
+        let class_name = class_name.trim();
+        if let Some(pos) = self.classes.iter().position(|c| c == class_name) {
+            self.classes.remove(pos);
+        }
+    }
+    
+    // Check if a class exists in the list
+    pub fn contains(&self, class_name: &str) -> bool {
+        self.classes.contains(&class_name.to_string())
+    }
+    
+    // Toggle a class (add if not present, remove if present)
+    pub fn toggle(&mut self, class_name: &str) -> bool {
+        if self.contains(class_name) {
+            self.remove(class_name);
+            false
+        } else {
+            self.add(class_name);
+            true
+        }
+    }
+    
+    // Replace one class with another
+    pub fn replace(&mut self, old_class: &str, new_class: &str) -> bool {
+        if let Some(pos) = self.classes.iter().position(|c| c == old_class) {
+            self.classes[pos] = new_class.to_string();
+            true
+        } else {
+            false
+        }
+    }
+    
+    // Get the number of classes
+    pub fn length(&self) -> usize {
+        self.classes.len()
+    }
+    
+    // Get class at specific index
+    pub fn item(&self, index: usize) -> Option<String> {
+        self.classes.get(index).cloned()
+    }
+    
+    // Convert back to string representation
+    pub fn to_string(&self) -> String {
+        self.classes.join(" ")
+    }
+    
+    // Get all classes as a space-separated string (for className property)
+    pub fn value(&self) -> String {
+        self.to_string()
+    }
+}
+
+// Mutable wrapper that keeps Element.className in sync with class changes
+pub struct DOMTokenListMut<'a> {
+    element: &'a mut Element,
+    token_list: DOMTokenList,
+}
+
+impl<'a> DOMTokenListMut<'a> {
+    pub fn new(element: &'a mut Element) -> Self {
+        let token_list = DOMTokenList::from_class_string(&element.className);
+        Self { element, token_list }
+    }
+    
+    // Add a class and update the element's className
+    pub fn add(&mut self, class_name: &str) {
+        self.token_list.add(class_name);
+        self.element.className = self.token_list.to_string();
+    }
+    
+    // Remove a class and update the element's className
+    pub fn remove(&mut self, class_name: &str) {
+        self.token_list.remove(class_name);
+        self.element.className = self.token_list.to_string();
+    }
+    
+    // Check if a class exists
+    pub fn contains(&self, class_name: &str) -> bool {
+        self.token_list.contains(class_name)
+    }
+    
+    // Toggle a class and update the element's className
+    pub fn toggle(&mut self, class_name: &str) -> bool {
+        let result = self.token_list.toggle(class_name);
+        self.element.className = self.token_list.to_string();
+        result
+    }
+    
+    // Replace one class with another and update the element's className
+    pub fn replace(&mut self, old_class: &str, new_class: &str) -> bool {
+        let result = self.token_list.replace(old_class, new_class);
+        if result {
+            self.element.className = self.token_list.to_string();
+        }
+        result
+    }
+    
+    // Get the number of classes
+    pub fn length(&self) -> usize {
+        self.token_list.length()
+    }
+    
+    // Get class at specific index
+    pub fn item(&self, index: usize) -> Option<String> {
+        self.token_list.item(index)
+    }
+    
+    // Get all classes as a space-separated string
+    pub fn value(&self) -> String {
+        self.token_list.value()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Element {
     pub id: String,
@@ -218,6 +365,16 @@ impl Element {
 
     pub fn getBoundingClientRect(&self) -> DOMRect {
         DOMRect::new()
+    }
+
+    // classList property to match JavaScript DOM API
+    pub fn classList(&self) -> DOMTokenList {
+        DOMTokenList::from_class_string(&self.className)
+    }
+    
+    // Mutable version for modification
+    pub fn classList_mut(&mut self) -> DOMTokenListMut {
+        DOMTokenListMut::new(self)
     }
 
     // WebRTC and Media Element extensions for <video> and <audio> elements
