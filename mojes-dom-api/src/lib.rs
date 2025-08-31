@@ -1992,6 +1992,7 @@ impl MediaStreamTrack {
 }
 
 // Media Constraints Types
+#[js_type]
 #[derive(Debug, Clone)]
 pub enum MediaTrackConstraints {
     Bool(bool),
@@ -2018,6 +2019,7 @@ impl MediaTrackConstraints {
     }
 }
 
+#[js_type]
 #[derive(Debug, Clone)]
 pub struct MediaStreamConstraints {
     pub video: MediaTrackConstraints,
