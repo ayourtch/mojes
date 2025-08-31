@@ -2325,13 +2325,13 @@ pub struct RTCPeerConnection {
 }
 
 impl RTCPeerConnection {
-    pub fn new(configuration: &RTCConfiguration) -> Result<Self, String> {
+    pub fn new(configuration: &RTCConfiguration) -> Self {
         println!("RTCPeerConnection.new() with {} ICE servers", configuration.ice_servers.len());
-        Ok(Self {
+        Self {
             connection_state: "new".to_string(),
             ice_connection_state: "new".to_string(),
             signaling_state: "stable".to_string(),
-        })
+        }
     }
 
     // Session description methods
