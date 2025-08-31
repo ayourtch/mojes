@@ -8,6 +8,15 @@ use syn::{Block, Expr, Fields, ItemEnum, ItemStruct, Pat, Stmt, Type};
 // use syn::{FnArg, ImplItem, ItemImpl, ReturnType, Signature};
 use syn::{FnArg, ImplItem, ItemImpl};
 
+/// Debug macro that only prints when MOJES_DEBUG environment variable is set
+macro_rules! debug_print {
+    ($($arg:tt)*) => {
+        if std::env::var("MOJES_DEBUG").is_ok() {
+            println!($($arg)*);
+        }
+    };
+}
+
 /// Transpiler state for managing context and symbols during translation
 pub struct TranspilerState {
     /// Symbol table for variable name mapping and type tracking
@@ -541,7 +550,7 @@ fn convert_if_to_stmt(
     if_expr: &syn::ExprIf,
     state: &mut TranspilerState,
 ) -> Result<js::Stmt, String> {
-    println!("DEBUG IF: {:?} {:?}", &block_action, &if_expr);
+    debug_print!("DEBUG IF: {:?} {:?}", &block_action, &if_expr);
     // panic!("XXX");
     // Check if this is an if-let expression
     if let Some(if_let_stmt) = handle_if_let_as_stmt(block_action, if_expr, state)? {
@@ -947,7 +956,7 @@ pub fn rust_block_to_js_with_state(
     state: &mut TranspilerState,
 ) -> Result<Vec<js::Stmt>, String> {
     let mut js_stmts = Vec::new();
-    println!("DEBUG BLK: {:?} {:?}", &block_action, &block);
+    debug_print!("DEBUG BLK: {:?} {:?}", &block_action, &block);
     if block_action == BlockAction::NoReturn {
         // panic!("XXX");
     }
@@ -957,7 +966,7 @@ pub fn rust_block_to_js_with_state(
     for stmt in &block.stmts {
         match stmt {
             Stmt::Local(local) => {
-                println!("DEBUG BLOCK LOCAL: {:?}", &local);
+                debug_print!("DEBUG BLOCK LOCAL: {:?}", &local);
                 let js_stmt = handle_local_statement(block_action, local, state)?;
                 js_stmts.push(js_stmt);
             }
@@ -1004,11 +1013,11 @@ pub fn rust_block_to_js_with_state(
                     Expr::If(if_expr) => {
                         // Generate direct statement
                         let if_stmt = convert_if_to_stmt(block_action, if_expr, state)?;
-                        println!("DEBUG IFIN BLOCK: {:?}", if_stmt);
+                        debug_print!("DEBUG IFIN BLOCK: {:?}", if_stmt);
                         js_stmts.push(if_stmt);
                     }
                     x => {
-                        println!(
+                        debug_print!(
                             "DEBUG EXPR IN BLOCK (block action: {:?}) : {:?}, semi: {:?}",
                             &block_action, &x, &semi
                         );
@@ -1021,7 +1030,7 @@ pub fn rust_block_to_js_with_state(
                             // Expression without semicolon - only return if it's the last statement
                             let is_last_stmt = stmt == block.stmts.last().unwrap();
                             if is_last_stmt && block_action == BlockAction::Return {
-                                println!("DEBUG BLOCK: return statement: {:?}", block_action);
+                                debug_print!("DEBUG BLOCK: return statement: {:?}", block_action);
                                 js_stmts.push(state.mk_return_stmt(Some(js_expr)));
                             } else {
                                 js_stmts.push(state.mk_expr_stmt(js_expr));
@@ -1132,7 +1141,7 @@ pub fn rust_expr_to_js_with_action_and_state(
     expr: &Expr,
     state: &mut TranspilerState,
 ) -> Result<js::Expr, String> {
-    println!("DEBUG EXPR: {:?}, {:?}", block_action, &expr);
+    debug_print!("DEBUG EXPR: {:?}, {:?}", block_action, &expr);
     match expr {
         // Handle literals
         Expr::Lit(lit) => match &lit.lit {
@@ -1321,7 +1330,7 @@ pub fn rust_expr_to_js_with_action_and_state(
 
         // Handle block expressions
         Expr::Block(block_expr) => {
-            println!("DEBUG EXPR block action: {:?}", block_action);
+            debug_print!("DEBUG EXPR block action: {:?}", block_action);
             let stmts = rust_block_to_js_with_state(block_action, &block_expr.block, state)?;
             Ok(state.mk_iife(stmts))
         }
@@ -2136,7 +2145,7 @@ fn handle_macro_expr(mac: &syn::Macro, state: &mut TranspilerState) -> Result<js
     };
 
     let tokens = mac.tokens.to_string();
-    println!("MACRO-DEBUG: {}", macro_name.as_str());
+    debug_print!("MACRO-DEBUG: {}", macro_name.as_str());
 
     match macro_name.as_str() {
         "println" | "print" => {
@@ -2386,7 +2395,7 @@ fn handle_format_macro_with_state(
     args: &Punctuated<Expr, Comma>,
     state: &mut TranspilerState,
 ) -> Result<js::Expr, String> {
-    println!("DEBUG-handle_format_macro_with_state");
+    debug_print!("DEBUG-handle_format_macro_with_state");
     if args.is_empty() {
         return Ok(js::Expr::Tpl(js::Tpl {
             span: DUMMY_SP,
