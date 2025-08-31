@@ -4,6 +4,38 @@
 
 use mojes_derive::js_type;
 
+// JavaScript Promise type
+#[js_type]
+#[derive(Debug, Clone)]
+pub struct Promise<T> {
+    _phantom: std::marker::PhantomData<T>,
+}
+
+impl<T> Promise<T> {
+    pub fn new() -> Self {
+        Self {
+            _phantom: std::marker::PhantomData,
+        }
+    }
+    
+    // Basic Promise methods that would be available in JavaScript
+    pub fn then<F>(&self, callback: F) -> Promise<T>
+    where
+        F: FnOnce(T),
+    {
+        // In JavaScript, this would be: promise.then(callback)
+        Promise::new()
+    }
+    
+    pub fn catch<F>(&self, callback: F) -> Promise<T>
+    where
+        F: FnOnce(String),
+    {
+        // In JavaScript, this would be: promise.catch(callback)
+        Promise::new()
+    }
+}
+
 #[linkme::distributed_slice]
 pub static JS: [&str];
 
@@ -2064,9 +2096,10 @@ impl MediaDeviceInfo {
 pub struct MediaDevices;
 
 impl MediaDevices {
-    pub fn getUserMedia(&self, constraints: &MediaStreamConstraints) -> Result<MediaStream, String> {
-        println!("MediaDevices.getUserMedia()");
-        Ok(MediaStream::new())
+    pub fn getUserMedia(&self, constraints: &MediaStreamConstraints) -> Promise<MediaStream> {
+        // This will transpile to: navigator.mediaDevices.getUserMedia(constraints)
+        // which returns a Promise<MediaStream> in JavaScript
+        Promise::new()
     }
 
     pub fn getDisplayMedia(&self, constraints: &MediaStreamConstraints) -> Result<MediaStream, String> {
