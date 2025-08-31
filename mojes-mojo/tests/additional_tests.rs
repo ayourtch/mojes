@@ -545,11 +545,9 @@ fn test_enum_json_generation() {
     // Should generate the enum factory object
     assert!(js_code.contains("const TestMessage"));
     
-    // Should generate JSON class with methods
-    assert!(js_code.contains("class TestMessageJSON"));
-    assert!(js_code.contains("toJSON"));
+    // Should generate JSON methods on the enum object
     assert!(js_code.contains("fromJSON"));
-    assert!(js_code.contains("static fromJSON"));
+    assert!(js_code.contains("TestMessage_toJSON"));
 }
 
 #[test]
@@ -630,7 +628,7 @@ fn test_enum_json_with_javascript_evaluation() {
         // Create a tuple variant instance
         const msg = {{ type: "Text", value0: "hello world" }};
         // Test toJSON method
-        const json = MessageJSON.prototype.toJSON.call(msg);
+        const json = Message_toJSON(msg);
         JSON.stringify(json);
         "#, 
         js_code
@@ -649,7 +647,7 @@ fn test_enum_json_with_javascript_evaluation() {
         // Create a struct variant instance
         const msg = {{ type: "Data", content: "important", priority: 1 }};
         // Test toJSON method
-        const json = MessageJSON.prototype.toJSON.call(msg);
+        const json = Message_toJSON(msg);
         JSON.stringify(json);
         "#, 
         js_code
@@ -687,12 +685,12 @@ fn test_enum_json_roundtrip() {
         const original = {{ type: "Add", value0: 5, value1: 10 }};
         
         // Serialize to JSON
-        const jsonData = OperationJSON.prototype.toJSON.call(original);
+        const jsonData = Operation_toJSON(original);
         const jsonString = JSON.stringify(jsonData);
         
         // Deserialize back
         const parsed = JSON.parse(jsonString);
-        const restored = OperationJSON.fromJSON(parsed);
+        const restored = Operation.fromJSON(parsed);
         
         // Check that it matches original structure
         JSON.stringify(restored);
@@ -716,12 +714,12 @@ fn test_enum_json_roundtrip() {
         const original = {{ type: "Multiply", x: 3, y: 4 }};
         
         // Serialize to JSON
-        const jsonData = OperationJSON.prototype.toJSON.call(original);
+        const jsonData = Operation_toJSON(original);
         const jsonString = JSON.stringify(jsonData);
         
         // Deserialize back
         const parsed = JSON.parse(jsonString);
-        const restored = OperationJSON.fromJSON(parsed);
+        const restored = Operation.fromJSON(parsed);
         
         // Check that it matches original structure
         JSON.stringify(restored);

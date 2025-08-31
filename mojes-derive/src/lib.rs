@@ -8,6 +8,165 @@ use mojes_mojo::generate_js_class_for_struct;
 use mojes_mojo::generate_js_enum;
 use mojes_mojo::generate_js_methods_for_impl;
 use mojes_mojo::rust_block_to_js;
+use syn::{Fields, Ident};
+
+/// Generate Rust JSON methods for enum companion struct
+fn generate_rust_enum_json_methods(input_enum: &ItemEnum, json_struct_name: &Ident) -> proc_macro2::TokenStream {
+    let enum_ident = &input_enum.ident;
+    
+    // Generate from_json method
+    let mut from_json_arms = Vec::new();
+    
+    for variant in &input_enum.variants {
+        let variant_name = &variant.ident;
+        let variant_str = variant_name.to_string();
+        
+        match &variant.fields {
+            Fields::Unit => {
+                // Unit variants: match string directly
+                from_json_arms.push(quote! {
+                    #variant_str => Some(#enum_ident::#variant_name),
+                });
+            }
+            Fields::Unnamed(fields) => {
+                // Tuple variants: extract from value0, value1, etc.
+                let field_count = fields.unnamed.len();
+                let field_extracts: Vec<_> = (0..field_count)
+                    .map(|i| {
+                        let field_name = format!("value{}", i);
+                        quote! { parsed.get(#field_name).and_then(|v| serde_json::from_value(v.clone()).ok())? }
+                    })
+                    .collect();
+                
+                from_json_arms.push(quote! {
+                    #variant_str => {
+                        let parsed = serde_json::from_str::<serde_json::Value>(json_str).ok()?;
+                        Some(#enum_ident::#variant_name(#(#field_extracts),*))
+                    },
+                });
+            }
+            Fields::Named(fields) => {
+                // Struct variants: extract named fields
+                let field_extracts: Vec<_> = fields.named.iter()
+                    .filter_map(|f| f.ident.as_ref())
+                    .map(|field_name| {
+                        let field_str = field_name.to_string();
+                        quote! { 
+                            #field_name: parsed.get(#field_str).and_then(|v| serde_json::from_value(v.clone()).ok())? 
+                        }
+                    })
+                    .collect();
+                
+                from_json_arms.push(quote! {
+                    #variant_str => {
+                        let parsed = serde_json::from_str::<serde_json::Value>(json_str).ok()?;
+                        Some(#enum_ident::#variant_name { #(#field_extracts),* })
+                    },
+                });
+            }
+        }
+    }
+    
+    // Generate to_json method  
+    let mut to_json_arms = Vec::new();
+    
+    for variant in &input_enum.variants {
+        let variant_name = &variant.ident;
+        let variant_str = variant_name.to_string();
+        
+        match &variant.fields {
+            Fields::Unit => {
+                // Unit variants: return just the string
+                to_json_arms.push(quote! {
+                    #enum_ident::#variant_name => #variant_str.to_string(),
+                });
+            }
+            Fields::Unnamed(fields) => {
+                // Tuple variants: create object with type and value0, value1, etc.
+                let field_count = fields.unnamed.len();
+                let field_names: Vec<_> = (0..field_count)
+                    .map(|i| format!("value{}", i))
+                    .collect();
+                let field_patterns: Vec<_> = (0..field_count)
+                    .map(|i| {
+                        let var_name = format_ident!("v{}", i);
+                        quote! { #var_name }
+                    })
+                    .collect();
+                let field_assigns: Vec<_> = (0..field_count)
+                    .map(|i| {
+                        let field_name = &field_names[i];
+                        let var_name = format_ident!("v{}", i);
+                        quote! { (#field_name, #var_name) }
+                    })
+                    .collect();
+                
+                to_json_arms.push(quote! {
+                    #enum_ident::#variant_name(#(#field_patterns),*) => {
+                        let mut map = serde_json::Map::new();
+                        map.insert("type".to_string(), serde_json::Value::String(#variant_str.to_string()));
+                        #(map.insert(#field_assigns.0.to_string(), serde_json::to_value(#field_assigns.1).unwrap_or(serde_json::Value::Null));)*
+                        serde_json::to_string(&serde_json::Value::Object(map)).unwrap_or_default()
+                    },
+                });
+            }
+            Fields::Named(fields) => {
+                // Struct variants: create object with type and named fields
+                let field_names: Vec<_> = fields.named.iter()
+                    .filter_map(|f| f.ident.as_ref())
+                    .collect();
+                let field_patterns: Vec<_> = field_names.iter().map(|name| quote! { #name }).collect();
+                let field_assigns: Vec<_> = field_names.iter()
+                    .map(|name| {
+                        let name_str = name.to_string();
+                        quote! { (#name_str, #name) }
+                    })
+                    .collect();
+                
+                to_json_arms.push(quote! {
+                    #enum_ident::#variant_name { #(#field_patterns),* } => {
+                        let mut map = serde_json::Map::new();
+                        map.insert("type".to_string(), serde_json::Value::String(#variant_str.to_string()));
+                        #(map.insert(#field_assigns.0.to_string(), serde_json::to_value(#field_assigns.1).unwrap_or(serde_json::Value::Null));)*
+                        serde_json::to_string(&serde_json::Value::Object(map)).unwrap_or_default()
+                    },
+                });
+            }
+        }
+    }
+    
+    quote! {
+        /// Deserialize from JSON string with type validation
+        pub fn from_json(json_str: &str) -> Option<#enum_ident> {
+            // First try to parse as a simple string (for unit variants)
+            if let Ok(s) = serde_json::from_str::<String>(json_str) {
+                return match s.as_str() {
+                    #(#from_json_arms)*
+                    _ => None,
+                };
+            }
+            
+            // Then try to parse as an object with type field
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
+                if let Some(type_val) = parsed.get("type").and_then(|v| v.as_str()) {
+                    return match type_val {
+                        #(#from_json_arms)*
+                        _ => None,
+                    };
+                }
+            }
+            
+            None
+        }
+        
+        /// Serialize enum to JSON string
+        pub fn to_json(value: &#enum_ident) -> String {
+            match value {
+                #(#to_json_arms)*
+            }
+        }
+    }
+}
 
 #[proc_macro_attribute]
 pub fn impl_to_js(_attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -139,12 +298,24 @@ pub fn js_type(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // Try as enum
     if let Ok(input_enum) = syn::parse::<ItemEnum>(input.clone()) {
         let enum_name = input_enum.ident.to_string();
+        let enum_ident = &input_enum.ident;
         let js_enum = generate_js_enum(&input_enum);
+        
+        // Generate companion Rust JSON struct
+        let json_struct_name = format_ident!("{}JSON", enum_name);
+        let json_methods = generate_rust_enum_json_methods(&input_enum, &json_struct_name);
 
         let js_const_name = format_ident!("{}_JS_ENUM", enum_name.to_uppercase());
 
         let output = quote! {
             #input_enum
+
+            /// Companion JSON utility struct for #enum_ident with the same API as JavaScript
+            pub struct #json_struct_name;
+            
+            impl #json_struct_name {
+                #json_methods
+            }
 
             #[linkme::distributed_slice(crate::JS)]
             static #js_const_name: &str = #js_enum;
