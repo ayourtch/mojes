@@ -21,19 +21,20 @@ fn test_wildcard_in_tuple_struct_execution() {
     let js_code = rust_expr_to_js(&expr);
     println!("Simple wildcard pattern: {}", js_code);
     
-    // Test with Ok variant
+    // Test with Ok variant - using correct Result format
     let test_code_ok = format!(r#"
-        const result = {{ type: "Ok", value0: "success" }};
+        const result = {{ ok: "success" }};
         const output = {};
         output;
     "#, js_code);
     
     let result = eval_js(&test_code_ok).unwrap();
+    println!("Result test_wildcard_in_tuple_struct_execution: {:?}", &result);
     assert_eq!(result.as_string().unwrap(), "success");
     
-    // Test with Err variant (wildcard should be ignored)
+    // Test with Err variant (wildcard should be ignored) - using correct Result format
     let test_code_err = format!(r#"
-        const result = {{ type: "Err", value0: "some error details" }};
+        const result = {{ error: "some error details" }};
         const output = {};
         output;
     "#, js_code);
