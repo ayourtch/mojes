@@ -1730,8 +1730,66 @@ fn handle_method_call(
     // Handle special method mappings
     match method_name.as_str() {
         "len" | "count" => {
-            // .len() becomes .length property access
-            Ok(state.mk_member_expr(receiver, "length"))
+            // Use IIFE to evaluate receiver once and handle both arrays/strings and objects
+            // ((obj) => obj.length !== undefined ? obj.length : Object.keys(obj).length)(receiver)
+            
+            // Create parameter for the IIFE
+            let obj_param = js::Pat::Ident(js::BindingIdent {
+                id: state.mk_ident("obj"),
+                type_ann: None,
+            });
+            
+            // Create obj.length access
+            let length_access = state.mk_member_expr(js::Expr::Ident(state.mk_ident("obj")), "length");
+            
+            // Create undefined check: obj.length !== undefined
+            let undefined_check = state.mk_binary_expr(
+                length_access.clone(),
+                js::BinaryOp::NotEqEq,
+                state.mk_undefined()
+            );
+            
+            // Create Object.keys(obj).length for objects
+            let object_keys = state.mk_call_expr(
+                state.mk_member_expr(js::Expr::Ident(state.mk_ident("Object")), "keys"),
+                vec![js::Expr::Ident(state.mk_ident("obj"))]
+            );
+            let object_keys_length = state.mk_member_expr(object_keys, "length");
+            
+            // Create conditional expression
+            let conditional = js::Expr::Cond(js::CondExpr {
+                span: DUMMY_SP,
+                test: Box::new(undefined_check),
+                cons: Box::new(length_access),
+                alt: Box::new(object_keys_length),
+            });
+            
+            // Create IIFE: (obj) => conditional
+            let iife = js::ArrowExpr {
+                span: DUMMY_SP,
+                params: vec![obj_param],
+                body: Box::new(js::BlockStmtOrExpr::Expr(Box::new(conditional))),
+                is_async: false,
+                is_generator: false,
+                type_params: None,
+                return_type: None,
+                ctxt: SyntaxContext::empty(),
+            };
+            
+            // Call the IIFE with receiver: ((obj) => ...)(receiver)
+            Ok(js::Expr::Call(js::CallExpr {
+                span: DUMMY_SP,
+                callee: js::Callee::Expr(Box::new(js::Expr::Paren(js::ParenExpr {
+                    span: DUMMY_SP,
+                    expr: Box::new(js::Expr::Arrow(iife)),
+                }))),
+                args: vec![js::ExprOrSpread {
+                    spread: None,
+                    expr: Box::new(receiver),
+                }],
+                type_args: None,
+                ctxt: SyntaxContext::empty(),
+            }))
         }
         "clone" => {
             // .clone() is typically a no-op in JavaScript for primitives

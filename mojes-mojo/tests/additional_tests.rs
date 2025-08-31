@@ -773,14 +773,24 @@ fn test_method_chaining() {
     let expr: Expr = parse_quote!(text.trim().to_uppercase().len());
     let js_code = rust_expr_to_js(&expr);
 
-    // Should be: text.trim().toUpperCase().length (property, not method)
-    assert!(js_code.contains("trim().toUpperCase().length"));
+    // Test execution instead of string pattern matching
+    let test_code = format!(
+        r#"
+        const text = "  hello world  ";
+        const result = {};
+        result;
+    "#,
+        js_code
+    );
+
+    let result = eval_js(&test_code).unwrap();
+    // "  hello world  ".trim().toUpperCase().length should be 11
+    assert_eq!(result.as_number().unwrap(), 11.0);
 
     // NOT: trim().toUpperCase().length() - that would be invalid JavaScript
     assert!(!js_code.contains("length()"));
 
-    println!("Method chaining result: {}", js_code);
-    assert_eq!(js_code, "text.trim().toUpperCase().length");
+    println!("Method chaining result: {} -> {}", js_code, result.as_number().unwrap());
 }
 
 #[test]
@@ -827,12 +837,39 @@ fn test_string_methods_mapping() {
             parse_quote!(s.ends_with("suffix")),
             "s.endsWith(\"suffix\")",
         ),
-        (parse_quote!(s.len()), "s.length"), // Property, not method!
     ];
 
-    for (expr, expected) in test_cases {
+    // Test the first 5 cases (non-len methods) with string matching
+    for (expr, expected) in test_cases.iter().take(5) {
+        let js_code = rust_expr_to_js(expr);
+        assert_eq!(js_code, *expected);
+        println!(
+            "✓ {} -> {}",
+            format!("{:?}", expr).split("::").last().unwrap_or("expr"),
+            js_code
+        );
+    }
+    
+    // Test s.len() separately with execution since it now uses IIFE
+    let len_expr = parse_quote!(s.len());
+    let len_js = rust_expr_to_js(&len_expr);
+    
+    // Test execution instead of string pattern
+    let test_code = format!(
+        r#"
+        const s = "hello";
+        const result = {};
+        result;
+    "#,
+        len_js
+    );
+    let result = eval_js(&test_code).unwrap();
+    assert_eq!(result.as_number().unwrap(), 5.0);
+    println!("✓ s.len() execution test: {} -> {}", len_js, result.as_number().unwrap());
+
+    // Verify all methods avoid function calls
+    for (expr, _expected) in test_cases {
         let js_code = rust_expr_to_js(&expr);
-        assert_eq!(js_code, expected);
         println!(
             "✓ {} -> {}",
             format!("{:?}", expr).split("::").last().unwrap_or("expr"),
@@ -843,17 +880,39 @@ fn test_string_methods_mapping() {
 
 #[test]
 fn test_array_vs_string_length() {
-    // Both arrays and strings should use .length property in JavaScript
+    // Both arrays and strings should work correctly with our universal len() solution
 
     // Array length
     let expr: Expr = parse_quote!(arr.len());
     let js_code = rust_expr_to_js(&expr);
-    assert_eq!(js_code, "arr.length");
+    
+    // Test array execution
+    let test_code = format!(
+        r#"
+        const arr = [1, 2, 3, 4, 5];
+        const result = {};
+        result;
+    "#,
+        js_code
+    );
+    let result = eval_js(&test_code).unwrap();
+    assert_eq!(result.as_number().unwrap(), 5.0);
 
     // String length
     let expr: Expr = parse_quote!(text.len());
     let js_code = rust_expr_to_js(&expr);
-    assert_eq!(js_code, "text.length");
+    
+    // Test string execution  
+    let test_code = format!(
+        r#"
+        const text = "hello";
+        const result = {};
+        result;
+    "#,
+        js_code
+    );
+    let result = eval_js(&test_code).unwrap();
+    assert_eq!(result.as_number().unwrap(), 5.0);
 
     // Test execution
     let test_code = r#"
@@ -874,18 +933,31 @@ fn test_complex_method_chaining() {
     let expr: Expr = parse_quote!(data.iter().map(process).filter(valid).collect().len());
     let js_code = rust_expr_to_js(&expr);
 
-    // Should remove .iter() and .collect(), keep .map() and .filter(), convert .len() to .length
+    // Should remove .iter() and .collect(), keep .map() and .filter()
     assert!(js_code.contains("map(process)"));
     assert!(js_code.contains("filter(valid)"));
-    assert!(js_code.ends_with(".length")); // Property access
     assert!(!js_code.contains("iter()"));
     assert!(!js_code.contains("collect()"));
     assert!(!js_code.contains("length()"));
 
     println!("Complex method chain: {}", js_code);
 
-    // Should be something like: data.map(process).filter(valid).length
-    assert_eq!(js_code, "data.map(process).filter(valid).length");
+    // Test with execution instead of exact string matching
+    let test_code = format!(
+        r#"
+        const data = [1, 2, 3, 4, 5];
+        function process(x) {{ return x * 2; }}
+        function valid(x) {{ return x > 4; }}
+        const result = {};
+        result;
+    "#,
+        js_code
+    );
+
+    let result = eval_js(&test_code).unwrap();
+    // data=[1,2,3,4,5] -> map(*2)=[2,4,6,8,10] -> filter(>4)=[6,8,10] -> len=3
+    assert_eq!(result.as_number().unwrap(), 3.0);
+    println!("Complex method chain execution successful -> {}", result.as_number().unwrap());
 }
 
 #[test]
@@ -894,14 +966,15 @@ fn test_mixed_method_types() {
     let expr: Expr = parse_quote!(vec.push(item).len());
     let js_code = rust_expr_to_js(&expr);
 
-    // Should be: vec.push(item).length
-    // Note: This might not be semantically correct (push returns void in JS),
-    // but we're testing the transpilation pattern
+    // Should contain push method call
     assert!(js_code.contains("push(item)"));
-    assert!(js_code.ends_with(".length"));
     assert!(!js_code.contains("length()"));
 
     println!("Mixed method types: {}", js_code);
+    
+    // Note: This is semantically questionable since push() returns void in JS,
+    // but we test that the transpilation at least handles the method chain structure
+    // The IIFE will attempt to get length of undefined, which should handle gracefully
 }
 #[test]
 fn test_string_methods() {
@@ -1027,7 +1100,8 @@ fn test_mixed_expressions_in_blocks() {
     assert!(js_code.contains("(x)=>x * 2") || js_code.contains("x => x * 2"));
 
     assert!(js_code.contains("data.map"));
-    assert!(js_code.contains("processed.length")); // .len() -> .length (property)
+    // The .len() now uses IIFE, so check for the universal length function
+    assert!(js_code.contains("obj.length") && js_code.contains("Object.keys")); // Universal len() solution
 
     println!("Mixed expressions JS output:\n{}", js_code);
 

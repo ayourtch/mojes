@@ -152,9 +152,17 @@ fn test_function_call_expressions() {
 
 #[test]
 fn test_method_call_expressions_0() {
-    // Basic method calls
+    // Test arr.len() with execution since it now uses IIFE
     let expr: Expr = parse_quote!(arr.len());
-    assert_eq!(rust_expr_to_js(&expr), "arr.length");
+    let js_code = rust_expr_to_js(&expr);
+    // Test execution instead of string matching
+    let test_code = format!(r#"
+        const arr = [1, 2, 3, 4, 5];
+        const result = {};
+        result;
+    "#, js_code);
+    let result = eval_js(&test_code).unwrap();
+    assert_eq!(result.as_number().unwrap(), 5.0);
 
     let expr: Expr = parse_quote!(vec.push(item));
     assert_eq!(rust_expr_to_js(&expr), "vec.push(item)");
@@ -179,9 +187,17 @@ fn test_method_call_expressions_0() {
 
 #[test]
 fn test_method_call_expressions() {
-    // Basic method calls
+    // Test arr.len() with execution since it now uses IIFE
     let expr: Expr = parse_quote!(arr.len());
-    assert_eq!(rust_expr_to_js(&expr), "arr.length"); // Property, not method!
+    let js_code = rust_expr_to_js(&expr);
+    // Test execution instead of string matching
+    let test_code = format!(r#"
+        const arr = [1, 2, 3];
+        const result = {};
+        result;
+    "#, js_code);
+    let result = eval_js(&test_code).unwrap();
+    assert_eq!(result.as_number().unwrap(), 3.0);
 
     let expr: Expr = parse_quote!(vec.push(item));
     assert_eq!(rust_expr_to_js(&expr), "vec.push(item)");
@@ -205,12 +221,26 @@ fn test_method_call_expressions() {
 // Add additional test to verify the distinction between methods and properties
 #[test]
 fn test_method_vs_property_distinction() {
-    // Properties (no parentheses in JavaScript)
+    // Test len() methods with execution since they now use IIFE
     let expr: Expr = parse_quote!(arr.len());
-    assert_eq!(rust_expr_to_js(&expr), "arr.length");
+    let js_code = rust_expr_to_js(&expr);
+    let test_code = format!(r#"
+        const arr = [1, 2, 3, 4];
+        const result = {};
+        result;
+    "#, js_code);
+    let result = eval_js(&test_code).unwrap();
+    assert_eq!(result.as_number().unwrap(), 4.0);
 
     let expr: Expr = parse_quote!(text.len());
-    assert_eq!(rust_expr_to_js(&expr), "text.length");
+    let js_code = rust_expr_to_js(&expr);
+    let test_code = format!(r#"
+        const text = "hello";
+        const result = {};
+        result;
+    "#, js_code);
+    let result = eval_js(&test_code).unwrap();
+    assert_eq!(result.as_number().unwrap(), 5.0);
 
     // Methods (keep parentheses in JavaScript)
     let expr: Expr = parse_quote!(arr.push(item));
@@ -257,10 +287,12 @@ fn test_corrected_method_chaining() {
     let expr: Expr = parse_quote!(text.trim().to_uppercase().len());
     let js_code = rust_expr_to_js(&expr);
 
-    // Should end with .length (property), not .length() (method call)
-    assert_eq!(js_code, "text.trim().toUpperCase().length");
+    // Should contain method chaining and length functionality  
+    assert!(js_code.contains("trim()"));
+    assert!(js_code.contains("toUpperCase()"));
+    assert!(!js_code.contains("length()")); // No method call for length
 
-    // Test execution
+    // Test execution - this is what really matters
     let test_code = format!("const text = '  hello  '; {}", js_code);
     let result = eval_js(&test_code).unwrap();
     assert_eq!(result.as_number().unwrap(), 5.0); // "hello".length
@@ -281,14 +313,24 @@ fn test_all_string_methods() {
         (parse_quote!(s.replace("a", "b")), "s.replace(\"a\", \"b\")"),
         (parse_quote!(s.split(",")), "s.split(\",\")"),
         (parse_quote!(s.contains("test")), "s.includes(\"test\")"),
-        // Properties (no parentheses)
-        (parse_quote!(s.len()), "s.length"),
     ];
 
+    // Test methods with string matching (except len())
     for (expr, expected) in test_cases {
         let js_code = rust_expr_to_js(&expr);
         assert_eq!(js_code, expected, "Failed for expression: {:?}", expr);
     }
+
+    // Test s.len() separately with execution since it now uses IIFE
+    let expr: Expr = parse_quote!(s.len());
+    let js_code = rust_expr_to_js(&expr);
+    let test_code = format!(r#"
+        const s = "hello world";
+        const result = {};
+        result;
+    "#, js_code);
+    let result = eval_js(&test_code).unwrap();
+    assert_eq!(result.as_number().unwrap(), 11.0);
 }
 
 // Test all the array/vector methods we support
@@ -304,14 +346,24 @@ fn test_all_array_methods() {
         (parse_quote!(arr.filter(pred)), "arr.filter(pred)"),
         (parse_quote!(arr.find(pred)), "arr.find(pred)"),
         (parse_quote!(arr.contains(item)), "arr.includes(item)"),
-        // Properties (no parentheses)
-        (parse_quote!(arr.len()), "arr.length"),
     ];
 
+    // Test methods with string matching (except len())
     for (expr, expected) in test_cases {
         let js_code = rust_expr_to_js(&expr);
         assert_eq!(js_code, expected, "Failed for expression: {:?}", expr);
     }
+
+    // Test arr.len() separately with execution since it now uses IIFE
+    let expr: Expr = parse_quote!(arr.len());
+    let js_code = rust_expr_to_js(&expr);
+    let test_code = format!(r#"
+        const arr = [1, 2, 3, 4, 5, 6];
+        const result = {};
+        result;
+    "#, js_code);
+    let result = eval_js(&test_code).unwrap();
+    assert_eq!(result.as_number().unwrap(), 6.0);
 }
 
 #[test]
