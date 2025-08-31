@@ -1893,6 +1893,7 @@ impl RTCSessionDescription {
 }
 
 // ICE Candidate Types
+#[js_type]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RTCIceCandidateInit {
     pub candidate: String,
@@ -1900,16 +1901,34 @@ pub struct RTCIceCandidateInit {
     pub sdp_mline_index: Option<u16>,
 }
 
+#[js_object]
 impl RTCIceCandidateInit {
     pub fn new(candidate: String) -> Self {
         Self {
             candidate,
-            sdp_mid: None,
+            sdp_mid: Some("0".to_string()), // Default to first media line
+            sdp_mline_index: Some(0), // Default to first media line index
+        }
+    }
+    
+    pub fn with_sdp_mid(candidate: String, sdp_mid: String) -> Self {
+        Self {
+            candidate,
+            sdp_mid: Some(sdp_mid),
             sdp_mline_index: None,
+        }
+    }
+    
+    pub fn with_mline_index(candidate: String, sdp_mline_index: u16) -> Self {
+        Self {
+            candidate,
+            sdp_mid: None,
+            sdp_mline_index: Some(sdp_mline_index),
         }
     }
 }
 
+#[js_type]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RTCIceCandidate {
     pub candidate: String,        // ICE candidate string
@@ -1924,9 +1943,10 @@ pub struct RTCIceCandidate {
     pub type_: Option<String>,    // "host", "srflx", "prflx", "relay"
 }
 
+#[js_object]
 impl RTCIceCandidate {
-    pub fn new(init: RTCIceCandidateInit) -> Result<Self, String> {
-        Ok(Self {
+    pub fn new(init: RTCIceCandidateInit) -> Self {
+        Self {
             candidate: init.candidate,
             sdp_mid: init.sdp_mid,
             sdp_mline_index: init.sdp_mline_index,
@@ -1937,7 +1957,16 @@ impl RTCIceCandidate {
             protocol: None,
             port: None,
             type_: None,
-        })
+        }
+    }
+    
+    // Convert back to RTCIceCandidateInit for browser compatibility
+    pub fn to_init(&self) -> RTCIceCandidateInit {
+        RTCIceCandidateInit {
+            candidate: self.candidate.clone(),
+            sdp_mid: self.sdp_mid.clone(),
+            sdp_mline_index: self.sdp_mline_index,
+        }
     }
 }
 
@@ -2378,8 +2407,8 @@ impl RTCPeerConnection {
     }
 
     // ICE candidate methods
-    pub fn addIceCandidate(&self, candidate: &RTCIceCandidate) -> Promise<()> {
-        println!("RTCPeerConnection.addIceCandidate()");
+    pub fn addIceCandidate(&self, candidate: &RTCIceCandidateInit) -> Promise<()> {
+        println!("RTCPeerConnection.addIceCandidate({:?})", candidate);
         Promise::new()
     }
 
