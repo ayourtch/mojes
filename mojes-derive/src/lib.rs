@@ -10,8 +10,8 @@ use mojes_mojo::generate_js_methods_for_impl;
 use mojes_mojo::rust_block_to_js;
 use syn::{Fields, Ident};
 
-/// Generate Rust JSON methods for enum companion struct
-fn generate_rust_enum_json_methods(input_enum: &ItemEnum, json_struct_name: &Ident) -> proc_macro2::TokenStream {
+/// Generate Rust JSON methods for enum impl block
+fn generate_rust_enum_json_methods(input_enum: &ItemEnum) -> proc_macro2::TokenStream {
     let enum_ident = &input_enum.ident;
     
     // Generate from_json method
@@ -137,7 +137,8 @@ fn generate_rust_enum_json_methods(input_enum: &ItemEnum, json_struct_name: &Ide
     
     quote! {
         /// Deserialize from JSON string with type validation
-        pub fn from_json(json_str: &str) -> Option<#enum_ident> {
+        /// Matches JavaScript API: TestMessage.fromJSON(jsonString)
+        pub fn fromJSON(json_str: &str) -> Option<#enum_ident> {
             // First try to parse as a simple string (for unit variants)
             if let Ok(s) = serde_json::from_str::<String>(json_str) {
                 return match s.as_str() {
@@ -159,8 +160,9 @@ fn generate_rust_enum_json_methods(input_enum: &ItemEnum, json_struct_name: &Ide
             None
         }
         
-        /// Serialize enum to JSON string
-        pub fn to_json(value: &#enum_ident) -> String {
+        /// Serialize enum to JSON string  
+        /// Matches JavaScript API: TestMessage.toJSON(enumValue)
+        pub fn toJSON(value: &#enum_ident) -> String {
             match value {
                 #(#to_json_arms)*
             }
@@ -301,19 +303,15 @@ pub fn js_type(_attr: TokenStream, item: TokenStream) -> TokenStream {
         let enum_ident = &input_enum.ident;
         let js_enum = generate_js_enum(&input_enum);
         
-        // Generate companion Rust JSON struct
-        let json_struct_name = format_ident!("{}JSON", enum_name);
-        let json_methods = generate_rust_enum_json_methods(&input_enum, &json_struct_name);
+        // Generate JSON methods directly on the enum impl
+        let json_methods = generate_rust_enum_json_methods(&input_enum);
 
         let js_const_name = format_ident!("{}_JS_ENUM", enum_name.to_uppercase());
 
         let output = quote! {
             #input_enum
 
-            /// Companion JSON utility struct for #enum_ident with the same API as JavaScript
-            pub struct #json_struct_name;
-            
-            impl #json_struct_name {
+            impl #enum_ident {
                 #json_methods
             }
 
