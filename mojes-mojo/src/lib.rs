@@ -3812,7 +3812,42 @@ fn handle_pattern_binding(
 
                     state.mk_binary_expr(not_null, js::BinaryOp::LogicalAnd, not_undefined)
                 } else {
-                    panic!("Unsupported tuple struct ident {:?}", &segment);
+                    // Handle generic enum variants with data - e.g., TestMessage::MessageOne(s)
+                    let variant_name = segment.ident.to_string();
+                    
+                    // Generate condition: _match_value.type === 'MessageOne'
+                    let type_check = state.mk_binary_expr(
+                        state.mk_member_expr(
+                            js::Expr::Ident(state.mk_ident(match_var)),
+                            "type"
+                        ),
+                        js::BinaryOp::EqEqEq,
+                        state.mk_str_lit(&variant_name),
+                    );
+                    
+                    // Handle parameter binding for enum variant data
+                    for (i, inner_pat) in tuple_struct.elems.iter().enumerate() {
+                        if let Pat::Ident(pat_ident) = inner_pat {
+                            let var_name = pat_ident.ident.to_string();
+                            let js_var_name = escape_js_identifier(&var_name);
+                            state.declare_variable(var_name, js_var_name.clone(), false);
+                            
+                            // Generate: const s = _match_value.value0;
+                            let field_name = format!("value{}", i);
+                            binding_stmts.push(state.mk_var_decl(
+                                &js_var_name,
+                                Some(state.mk_member_expr(
+                                    js::Expr::Ident(state.mk_ident(match_var)),
+                                    &field_name
+                                )),
+                                true,
+                            ));
+                        } else {
+                            panic!("Complex patterns inside tuple struct not yet supported: {:?}", inner_pat);
+                        }
+                    }
+                    
+                    type_check
                 }
             } else {
                 panic!(

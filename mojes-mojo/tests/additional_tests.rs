@@ -243,6 +243,191 @@ fn test_match_with_mixed_patterns() {
     assert!(js_code.contains("const x = _match_value"));
 }
 
+// ==================== CUSTOM ENUM PATTERN MATCHING ====================
+#[test]
+fn test_custom_enum_pattern_matching_single_param() {
+    // Test TestMessage::MessageOne(s) pattern
+    let expr: Expr = parse_quote! {
+        match msg {
+            TestMessage::MessageOne(s) => format!("Got: {}", s),
+            TestMessage::MessageTwo(x, y) => format!("Coords: {}, {}", x, y),
+        }
+    };
+
+    let js_code = rust_expr_to_js(&expr);
+    println!("DEBUG test_custom_enum_pattern_matching_single_param js code: {}", &js_code);
+    
+    // Should generate type checks for each variant
+    assert!(js_code.contains("_match_value.type === \"MessageOne\""));
+    assert!(js_code.contains("_match_value.type === \"MessageTwo\""));
+    
+    // Should generate parameter binding for MessageOne
+    assert!(js_code.contains("const s = _match_value.value0"));
+    
+    // Should generate parameter binding for MessageTwo
+    assert!(js_code.contains("const x = _match_value.value0"));
+    assert!(js_code.contains("const y = _match_value.value1"));
+}
+
+#[test]
+fn test_custom_enum_pattern_matching_multiple_params() {
+    // Test a more complex enum with multiple parameters
+    let expr: Expr = parse_quote! {
+        match command {
+            Command::Move(x, y) => {
+                println!("Moving to {}, {}", x, y);
+            },
+            Command::Resize(width, height, depth) => {
+                println!("Resizing to {}x{}x{}", width, height, depth);
+            },
+            Command::Stop => {
+                println!("Stopping");
+            },
+        }
+    };
+
+    let js_code = rust_expr_to_js(&expr);
+    println!("DEBUG test_custom_enum_pattern_matching_multiple_params js code: {}", &js_code);
+    
+    // Should handle variants with different numbers of parameters
+    assert!(js_code.contains("_match_value.type === \"Move\""));
+    assert!(js_code.contains("_match_value.type === \"Resize\""));
+    // Stop is a unit variant, so it's compared directly as a string
+    assert!(js_code.contains("_match_value === \"Stop\""));
+    
+    // Should bind parameters correctly for Move variant
+    assert!(js_code.contains("const x = _match_value.value0"));
+    assert!(js_code.contains("const y = _match_value.value1"));
+    
+    // Should bind parameters correctly for Resize variant  
+    assert!(js_code.contains("const width = _match_value.value0"));
+    assert!(js_code.contains("const height = _match_value.value1"));
+    assert!(js_code.contains("const depth = _match_value.value2"));
+}
+
+#[test]
+fn test_custom_enum_mixed_with_simple_patterns() {
+    // Test mixing enum patterns with simple patterns
+    let expr: Expr = parse_quote! {
+        match value {
+            42 => "answer",
+            TestMessage::MessageOne(s) => s,
+            x => format!("other: {}", x),
+        }
+    };
+
+    let js_code = rust_expr_to_js(&expr);
+    println!("DEBUG test_custom_enum_mixed_with_simple_patterns js code: {}", &js_code);
+    
+    // Should handle literal pattern
+    assert!(js_code.contains("=== 42"));
+    
+    // Should handle custom enum pattern
+    assert!(js_code.contains("_match_value.type === \"MessageOne\""));
+    assert!(js_code.contains("const s = _match_value.value0"));
+    
+    // Should handle variable binding pattern
+    assert!(js_code.contains("const x = _match_value"));
+}
+
+#[test]
+fn test_custom_enum_pattern_matching_javascript_evaluation() {
+    // Test that the generated JavaScript actually executes correctly with real enum-like objects
+    let expr: Expr = parse_quote! {
+        match msg {
+            TestMessage::MessageOne(text) => format!("One: {}", text),
+            TestMessage::MessageTwo(x, y) => format!("Two: {} {}", x, y),
+        }
+    };
+
+    let js_code = rust_expr_to_js(&expr);
+    println!("DEBUG test_custom_enum_pattern_matching_javascript_evaluation js code: {}", &js_code);
+    
+    // Test MessageOne variant - create JS object that matches #[js_type] enum generation
+    let test_code_one = format!(
+        r#"
+        const msg = {{ type: "MessageOne", value0: "hello" }};
+        {}
+        "#, 
+        js_code
+    );
+    
+    let result_one = eval_js(&test_code_one).unwrap();
+    assert_eq!(result_one.as_string().unwrap(), "One: hello");
+    
+    // Test MessageTwo variant 
+    let test_code_two = format!(
+        r#"
+        const msg = {{ type: "MessageTwo", value0: 42, value1: 100 }};
+        {}
+        "#, 
+        js_code
+    );
+    
+    let result_two = eval_js(&test_code_two).unwrap();
+    assert_eq!(result_two.as_string().unwrap(), "Two: 42 100");
+}
+
+#[test]
+fn test_custom_enum_mixed_patterns_javascript_evaluation() {
+    // Test mixing unit variants, data variants, and other patterns with actual JavaScript execution
+    let expr: Expr = parse_quote! {
+        match value {
+            42 => "answer",
+            Command::Stop => "stopped", 
+            Command::Move(x, y) => format!("moved to {},{}", x, y),
+            other => format!("other: {}", other),
+        }
+    };
+
+    let js_code = rust_expr_to_js(&expr);
+    println!("DEBUG test_custom_enum_mixed_patterns_javascript_evaluation js code: {}", &js_code);
+    
+    // Test literal pattern
+    let test_literal = format!(
+        r#"
+        const value = 42;
+        {}
+        "#,
+        js_code
+    );
+    let result = eval_js(&test_literal).unwrap();
+    assert_eq!(result.as_string().unwrap(), "answer");
+    
+    // Test unit variant (Stop is just a string)
+    let test_unit = format!(
+        r#"
+        const value = "Stop";
+        {}
+        "#,
+        js_code
+    );
+    let result = eval_js(&test_unit).unwrap();
+    assert_eq!(result.as_string().unwrap(), "stopped");
+    
+    // Test data variant (Move has parameters)
+    let test_data = format!(
+        r#"
+        const value = {{ type: "Move", value0: 10, value1: 20 }};
+        {}
+        "#,
+        js_code
+    );
+    let result = eval_js(&test_data).unwrap();
+    assert_eq!(result.as_string().unwrap(), "moved to 10,20");
+    
+    // Test variable binding fallback
+    let test_fallback = format!(
+        r#"
+        const value = 999;
+        {}
+        "#,
+        js_code
+    );
+    let result = eval_js(&test_fallback).unwrap();
+    assert_eq!(result.as_string().unwrap(), "other: 999");
+}
+
 // ==================== NESTED OPTION MATCHING ====================
 #[test]
 fn test_nested_option_match() {
