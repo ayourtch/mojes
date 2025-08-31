@@ -231,6 +231,7 @@ pub struct Element {
     pub name: String,
     pub tagName: String,
     pub className: String,
+    pub classList: DOMTokenList,
     pub innerHTML: String,
     pub innerText: String,
     pub outerHTML: String,
@@ -239,12 +240,13 @@ pub struct Element {
 }
 
 impl Element {
-    pub const fn new(_tag_name: &str) -> Self {
+    pub fn new(tag_name: &str) -> Self {
         Self {
             id: String::new(),
             name: String::new(),
-            tagName: String::new(), // We'll set this separately since we can't call to_string() in const
+            tagName: tag_name.to_string(),
             className: String::new(),
+            classList: DOMTokenList::new(),
             innerHTML: String::new(),
             innerText: String::new(),
             outerHTML: String::new(),
@@ -259,12 +261,23 @@ impl Element {
             name: String::new(),
             tagName: tag_name.to_string(),
             className: String::new(),
+            classList: DOMTokenList::new(),
             innerHTML: String::new(),
             innerText: String::new(),
             outerHTML: String::new(),
             textContent: String::new(),
             value: String::new(),
         }
+    }
+    
+    // Helper method to sync classList with className
+    pub fn sync_classList_from_className(&mut self) {
+        self.classList = DOMTokenList::from_class_string(&self.className);
+    }
+    
+    // Helper method to sync className from classList
+    pub fn sync_className_from_classList(&mut self) {
+        self.className = self.classList.to_string();
     }
 
     pub fn getAttribute(&self, _name: &str) -> Option<String> {
@@ -365,16 +378,6 @@ impl Element {
 
     pub fn getBoundingClientRect(&self) -> DOMRect {
         DOMRect::new()
-    }
-
-    // classList property to match JavaScript DOM API
-    pub fn classList(&self) -> DOMTokenList {
-        DOMTokenList::from_class_string(&self.className)
-    }
-    
-    // Mutable version for modification
-    pub fn classList_mut(&mut self) -> DOMTokenListMut {
-        DOMTokenListMut::new(self)
     }
 
     // WebRTC and Media Element extensions for <video> and <audio> elements
