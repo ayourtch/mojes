@@ -1830,16 +1830,95 @@ fn handle_method_call(
             }
         }
         "insert" => {
-            // vec.insert(index, item) -> vec.splice(index, 0, item)
+            // Universal insert: use splice for arrays, property assignment for objects/HashMaps
+            // ((obj, key, val) => obj.splice ? obj.splice(key, 0, val) : (obj[key] = val))(receiver, key, value)
             if js_args.len() == 2 {
-                Ok(state.mk_call_expr(
-                    state.mk_member_expr(receiver, "splice"),
+                // Create parameters for the IIFE
+                let obj_param = js::Pat::Ident(js::BindingIdent {
+                    id: state.mk_ident("obj"),
+                    type_ann: None,
+                });
+                let key_param = js::Pat::Ident(js::BindingIdent {
+                    id: state.mk_ident("key"),
+                    type_ann: None,
+                });
+                let val_param = js::Pat::Ident(js::BindingIdent {
+                    id: state.mk_ident("val"),
+                    type_ann: None,
+                });
+                
+                // Check if obj.splice exists (array)
+                let splice_check = state.mk_member_expr(js::Expr::Ident(state.mk_ident("obj")), "splice");
+                
+                // Array case: obj.splice(key, 0, val)
+                let array_insert = state.mk_call_expr(
+                    splice_check.clone(),
                     vec![
-                        js_args[0].clone(),
+                        js::Expr::Ident(state.mk_ident("key")),
                         state.mk_num_lit(0.0),
-                        js_args[1].clone(),
+                        js::Expr::Ident(state.mk_ident("val")),
                     ],
-                ))
+                );
+                
+                // Object case: obj[key] = val
+                let obj_assignment = js::Expr::Assign(js::AssignExpr {
+                    span: DUMMY_SP,
+                    op: js::AssignOp::Assign,
+                    left: js::AssignTarget::Simple(js::SimpleAssignTarget::Member(js::MemberExpr {
+                        span: DUMMY_SP,
+                        obj: Box::new(js::Expr::Ident(state.mk_ident("obj"))),
+                        prop: js::MemberProp::Computed(js::ComputedPropName {
+                            span: DUMMY_SP,
+                            expr: Box::new(js::Expr::Ident(state.mk_ident("key"))),
+                        }),
+                    })),
+                    right: Box::new(js::Expr::Ident(state.mk_ident("val"))),
+                });
+                
+                // Conditional: obj.splice ? array_insert : obj_assignment
+                let conditional = js::Expr::Cond(js::CondExpr {
+                    span: DUMMY_SP,
+                    test: Box::new(splice_check),
+                    cons: Box::new(array_insert),
+                    alt: Box::new(obj_assignment),
+                });
+                
+                // Create IIFE: (obj, key, val) => conditional
+                let iife = js::ArrowExpr {
+                    span: DUMMY_SP,
+                    params: vec![obj_param, key_param, val_param],
+                    body: Box::new(js::BlockStmtOrExpr::Expr(Box::new(conditional))),
+                    is_async: false,
+                    is_generator: false,
+                    type_params: None,
+                    return_type: None,
+                    ctxt: SyntaxContext::empty(),
+                };
+                
+                // Call the IIFE with arguments: ((obj, key, val) => ...)(receiver, key, value)
+                Ok(js::Expr::Call(js::CallExpr {
+                    span: DUMMY_SP,
+                    callee: js::Callee::Expr(Box::new(js::Expr::Paren(js::ParenExpr {
+                        span: DUMMY_SP,
+                        expr: Box::new(js::Expr::Arrow(iife)),
+                    }))),
+                    args: vec![
+                        js::ExprOrSpread {
+                            spread: None,
+                            expr: Box::new(receiver),
+                        },
+                        js::ExprOrSpread {
+                            spread: None,
+                            expr: Box::new(js_args[0].clone()),
+                        },
+                        js::ExprOrSpread {
+                            spread: None,
+                            expr: Box::new(js_args[1].clone()),
+                        },
+                    ],
+                    type_args: None,
+                    ctxt: SyntaxContext::empty(),
+                }))
             } else {
                 Err("insert() expects exactly two arguments".to_string())
             }

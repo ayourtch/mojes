@@ -3,6 +3,25 @@
 #![allow(non_upper_case_globals)]
 
 use mojes_derive::{js_type, js_object};
+use std::collections::HashMap;
+
+/// JavaScript-compatible methods for Rust types
+/// This trait provides JavaScript object method names that transpile directly
+/// while mapping to appropriate Rust implementations
+pub trait MojesMethods<T> {
+    /// JavaScript hasOwnProperty() method - checks if object has a property
+    /// Maps to HashMap::contains_key() in Rust
+    fn hasOwnProperty(&self, key: &str) -> bool;
+}
+
+/// Implementation for HashMap to provide JavaScript object-like access
+impl<T> MojesMethods<T> for HashMap<String, T> {
+    fn hasOwnProperty(&self, key: &str) -> bool {
+        // Transpiles to: this.hasOwnProperty(key)
+        // Rust implementation: check if key exists
+        self.contains_key(key)
+    }
+}
 
 // JavaScript Promise type
 #[js_type]
@@ -995,7 +1014,6 @@ pub fn decodeURIComponent(uri: &str) -> String {
 
 // localStorage API implementation for mojes-dom-api/src/lib.rs
 
-use std::collections::HashMap;
 use std::sync::Mutex;
 
 // Global mock storage for localStorage (in real implementation this would be browser storage)
@@ -2351,34 +2369,28 @@ impl RTCPeerConnection {
         ))
     }
 
-    pub fn setLocalDescription(&mut self, description: &RTCSessionDescription) -> Result<(), String> {
+    pub fn setLocalDescription(&self, description: &RTCSessionDescription) -> Result<(), String> {
         println!("RTCPeerConnection.setLocalDescription({})", description.type_);
-        self.signaling_state = match description.type_.as_str() {
-            "offer" => "have-local-offer",
-            "answer" => "stable",
-            _ => "stable",
-        }.to_string();
+        // Note: In real WebRTC, this would update the connection state
+        // but for Mojes transpilation, the browser handles state changes
         Ok(())
     }
 
-    pub fn setRemoteDescription(&mut self, description: &RTCSessionDescription) -> Result<(), String> {
+    pub fn setRemoteDescription(&self, description: &RTCSessionDescription) -> Result<(), String> {
         println!("RTCPeerConnection.setRemoteDescription({})", description.type_);
-        self.signaling_state = match description.type_.as_str() {
-            "offer" => "have-remote-offer",
-            "answer" => "stable",
-            _ => "stable",
-        }.to_string();
+        // Note: In real WebRTC, this would update the connection state
+        // but for Mojes transpilation, the browser handles state changes
         Ok(())
     }
 
     // ICE candidate methods
-    pub fn addIceCandidate(&mut self, candidate: &RTCIceCandidate) -> Result<(), String> {
+    pub fn addIceCandidate(&self, candidate: &RTCIceCandidate) -> Result<(), String> {
         println!("RTCPeerConnection.addIceCandidate()");
         Ok(())
     }
 
     // Media track methods
-    pub fn addTrack(&mut self, track: MediaStreamTrack, stream: MediaStream) -> RTCRtpSender {
+    pub fn addTrack(&self, track: MediaStreamTrack, stream: MediaStream) -> RTCRtpSender {
         println!("RTCPeerConnection.addTrack({}, {})", track.id, stream.id);
         RTCRtpSender::new(Some(track))
     }
@@ -2389,7 +2401,7 @@ impl RTCPeerConnection {
     }
 
     // Event handlers (addEventListener with specific event types)
-    pub fn addEventListener<F>(&mut self, event_type: &str, listener: F)
+    pub fn addEventListener<F>(&self, event_type: &str, listener: F)
     where
         F: Fn(Event) + 'static,
     {

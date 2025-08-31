@@ -151,7 +151,7 @@ fn test_vector_methods_with_args() {
         &js_code
     );
     assert_eq!(js_code1, "vec.splice(index, 1)[0]");
-    assert_eq!(js_code, "vec.splice(0, 0, item)");
+    assert_eq!(js_code, "((obj, key, val)=>obj.splice ? obj.splice(key, 0, val) : obj[key] = val)(vec, 0, item)");
 }
 
 // ==================== 7. VARIABLE DECLARATIONS WITHOUT INIT ====================
