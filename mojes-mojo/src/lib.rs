@@ -3998,23 +3998,30 @@ fn handle_pattern_binding(
                     
                     // Handle parameter binding for enum variant data
                     for (i, inner_pat) in tuple_struct.elems.iter().enumerate() {
-                        if let Pat::Ident(pat_ident) = inner_pat {
-                            let var_name = pat_ident.ident.to_string();
-                            let js_var_name = escape_js_identifier(&var_name);
-                            state.declare_variable(var_name, js_var_name.clone(), false);
-                            
-                            // Generate: const s = _match_value.value0;
-                            let field_name = format!("value{}", i);
-                            binding_stmts.push(state.mk_var_decl(
-                                &js_var_name,
-                                Some(state.mk_member_expr(
-                                    js::Expr::Ident(state.mk_ident(match_var)),
-                                    &field_name
-                                )),
-                                true,
-                            ));
-                        } else {
-                            panic!("Complex patterns inside tuple struct not yet supported: {:?}", inner_pat);
+                        match inner_pat {
+                            Pat::Ident(pat_ident) => {
+                                let var_name = pat_ident.ident.to_string();
+                                let js_var_name = escape_js_identifier(&var_name);
+                                state.declare_variable(var_name, js_var_name.clone(), false);
+                                
+                                // Generate: const s = _match_value.value0;
+                                let field_name = format!("value{}", i);
+                                binding_stmts.push(state.mk_var_decl(
+                                    &js_var_name,
+                                    Some(state.mk_member_expr(
+                                        js::Expr::Ident(state.mk_ident(match_var)),
+                                        &field_name
+                                    )),
+                                    true,
+                                ));
+                            }
+                            Pat::Wild(_) => {
+                                // Wildcard pattern - ignore this field, no binding needed
+                                // This allows patterns like SomeEnum(value, _) where the second field is ignored
+                            }
+                            _ => {
+                                panic!("Complex patterns inside tuple struct not yet supported: {:?}", inner_pat);
+                            }
                         }
                     }
                     
