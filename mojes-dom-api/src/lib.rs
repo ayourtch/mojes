@@ -2352,41 +2352,35 @@ impl RTCPeerConnection {
         }
     }
 
-    // Session description methods
-    pub fn createOffer(&self) -> Result<RTCSessionDescription, String> {
+    // Session description methods - return Promises in real JavaScript
+    pub fn createOffer(&self) -> Promise<RTCSessionDescription> {
         println!("RTCPeerConnection.createOffer()");
-        Ok(RTCSessionDescription::new(
-            "offer".to_string(),
-            "v=0\r\no=- 123456789 123456789 IN IP4 0.0.0.0\r\n...".to_string()
-        ))
+        Promise::new()
     }
 
-    pub fn createAnswer(&self) -> Result<RTCSessionDescription, String> {
+    pub fn createAnswer(&self) -> Promise<RTCSessionDescription> {
         println!("RTCPeerConnection.createAnswer()");
-        Ok(RTCSessionDescription::new(
-            "answer".to_string(),
-            "v=0\r\no=- 987654321 987654321 IN IP4 0.0.0.0\r\n...".to_string()
-        ))
+        Promise::new()
     }
 
-    pub fn setLocalDescription(&self, description: &RTCSessionDescription) -> Result<(), String> {
+    pub fn setLocalDescription(&self, description: &RTCSessionDescription) -> Promise<()> {
         println!("RTCPeerConnection.setLocalDescription({})", description.type_);
         // Note: In real WebRTC, this would update the connection state
         // but for Mojes transpilation, the browser handles state changes
-        Ok(())
+        Promise::new()
     }
 
-    pub fn setRemoteDescription(&self, description: &RTCSessionDescription) -> Result<(), String> {
+    pub fn setRemoteDescription(&self, description: &RTCSessionDescription) -> Promise<()> {
         println!("RTCPeerConnection.setRemoteDescription({})", description.type_);
         // Note: In real WebRTC, this would update the connection state
         // but for Mojes transpilation, the browser handles state changes
-        Ok(())
+        Promise::new()
     }
 
     // ICE candidate methods
-    pub fn addIceCandidate(&self, candidate: &RTCIceCandidate) -> Result<(), String> {
+    pub fn addIceCandidate(&self, candidate: &RTCIceCandidate) -> Promise<()> {
         println!("RTCPeerConnection.addIceCandidate()");
-        Ok(())
+        Promise::new()
     }
 
     // Media track methods
