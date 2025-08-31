@@ -155,6 +155,59 @@ impl Element {
     pub fn getBoundingClientRect(&self) -> DOMRect {
         DOMRect::new()
     }
+
+    // WebRTC and Media Element extensions for <video> and <audio> elements
+    pub fn srcObject(&self) -> Option<MediaStream> {
+        println!("Element.srcObject getter");
+        None
+    }
+
+    pub fn set_srcObject(&mut self, stream: Option<MediaStream>) {
+        println!("Element.set_srcObject()");
+        // Mock implementation for transpilation
+    }
+
+    // Media element playback methods
+    pub fn play(&mut self) -> Result<(), String> {
+        println!("Element.play()");
+        Ok(())
+    }
+
+    pub fn pause(&mut self) {
+        println!("Element.pause()");
+    }
+
+    pub fn currentTime(&self) -> f64 {
+        println!("Element.currentTime getter");
+        0.0
+    }
+
+    pub fn set_currentTime(&mut self, time: f64) {
+        println!("Element.set_currentTime({})", time);
+    }
+
+    pub fn duration(&self) -> f64 {
+        println!("Element.duration getter");
+        0.0
+    }
+
+    pub fn muted(&self) -> bool {
+        println!("Element.muted getter");
+        false
+    }
+
+    pub fn set_muted(&mut self, muted: bool) {
+        println!("Element.set_muted({})", muted);
+    }
+
+    pub fn volume(&self) -> f64 {
+        println!("Element.volume getter");
+        1.0
+    }
+
+    pub fn set_volume(&mut self, volume: f64) {
+        println!("Element.set_volume({})", volume);
+    }
 }
 
 // Document interface
@@ -704,6 +757,11 @@ impl Navigator {
 
     pub fn taintEnabled(&self) -> bool {
         false
+    }
+
+    // WebRTC MediaDevices access (property-style getter)
+    pub fn mediaDevices(&self) -> MediaDevices {
+        MediaDevices
     }
 }
 
@@ -1703,5 +1761,608 @@ impl WebSocket {
         F: Fn(MessageEvent) + 'static,
     {
         // Mock implementation for transpilation
+    }
+}
+
+// =============================================================================
+// WebRTC API Implementation
+// =============================================================================
+
+// Core WebRTC Configuration Types
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RTCIceServer {
+    pub urls: Vec<String>,
+    pub username: Option<String>,
+    pub credential: Option<String>,
+    pub credential_type: Option<String>, // "password", "oauth"
+}
+
+impl RTCIceServer {
+    pub fn new(urls: Vec<String>) -> Self {
+        Self {
+            urls,
+            username: None,
+            credential: None,
+            credential_type: None,
+        }
+    }
+
+    pub fn with_credentials(urls: Vec<String>, username: String, credential: String) -> Self {
+        Self {
+            urls,
+            username: Some(username),
+            credential: Some(credential),
+            credential_type: Some("password".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RTCConfiguration {
+    pub ice_servers: Vec<RTCIceServer>,
+    pub ice_transport_policy: Option<String>, // "all", "relay"
+    pub bundle_policy: Option<String>, // "balanced", "max-compat", "max-bundle"
+    pub rtcp_mux_policy: Option<String>, // "negotiate", "require"
+}
+
+impl RTCConfiguration {
+    pub fn new() -> Self {
+        Self {
+            ice_servers: vec![],
+            ice_transport_policy: Some("all".to_string()),
+            bundle_policy: Some("balanced".to_string()),
+            rtcp_mux_policy: Some("require".to_string()),
+        }
+    }
+
+    pub fn with_ice_servers(ice_servers: Vec<RTCIceServer>) -> Self {
+        Self {
+            ice_servers,
+            ice_transport_policy: Some("all".to_string()),
+            bundle_policy: Some("balanced".to_string()),
+            rtcp_mux_policy: Some("require".to_string()),
+        }
+    }
+}
+
+// Session Description Types
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RTCSessionDescription {
+    pub type_: String, // "offer", "answer", "pranswer", "rollback"
+    pub sdp: String,   // SDP content
+}
+
+impl RTCSessionDescription {
+    pub fn new(type_: String, sdp: String) -> Self {
+        Self { type_, sdp }
+    }
+}
+
+// ICE Candidate Types
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RTCIceCandidateInit {
+    pub candidate: String,
+    pub sdp_mid: Option<String>,
+    pub sdp_mline_index: Option<u16>,
+}
+
+impl RTCIceCandidateInit {
+    pub fn new(candidate: String) -> Self {
+        Self {
+            candidate,
+            sdp_mid: None,
+            sdp_mline_index: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RTCIceCandidate {
+    pub candidate: String,        // ICE candidate string
+    pub sdp_mid: Option<String>,  // Media stream identification
+    pub sdp_mline_index: Option<u16>, // Media line index
+    pub foundation: Option<String>,
+    pub component: Option<u16>,
+    pub priority: Option<u32>,
+    pub address: Option<String>,
+    pub protocol: Option<String>, // "udp", "tcp"
+    pub port: Option<u16>,
+    pub type_: Option<String>,    // "host", "srflx", "prflx", "relay"
+}
+
+impl RTCIceCandidate {
+    pub fn new(init: RTCIceCandidateInit) -> Result<Self, String> {
+        Ok(Self {
+            candidate: init.candidate,
+            sdp_mid: init.sdp_mid,
+            sdp_mline_index: init.sdp_mline_index,
+            foundation: None,
+            component: None,
+            priority: None,
+            address: None,
+            protocol: None,
+            port: None,
+            type_: None,
+        })
+    }
+}
+
+// Media Stream Types
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MediaStream {
+    pub id: String,
+    pub active: bool,
+}
+
+impl MediaStream {
+    pub fn new() -> Self {
+        Self {
+            id: "mock-stream-id".to_string(),
+            active: true,
+        }
+    }
+
+    pub fn getTracks(&self) -> Vec<MediaStreamTrack> {
+        println!("MediaStream.getTracks()");
+        vec![]
+    }
+
+    pub fn getAudioTracks(&self) -> Vec<MediaStreamTrack> {
+        println!("MediaStream.getAudioTracks()");
+        vec![]
+    }
+
+    pub fn getVideoTracks(&self) -> Vec<MediaStreamTrack> {
+        println!("MediaStream.getVideoTracks()");
+        vec![]
+    }
+
+    pub fn addTrack(&mut self, track: MediaStreamTrack) {
+        println!("MediaStream.addTrack({})", track.id);
+    }
+
+    pub fn removeTrack(&mut self, track: MediaStreamTrack) {
+        println!("MediaStream.removeTrack({})", track.id);
+    }
+
+    pub fn clone(&self) -> Self {
+        Self {
+            id: format!("{}-clone", self.id),
+            active: self.active,
+        }
+    }
+
+    pub fn addEventListener<F>(&mut self, event_type: &str, listener: F)
+    where
+        F: Fn(Event) + 'static,
+    {
+        println!("MediaStream.addEventListener({})", event_type);
+        // Events: "addtrack", "removetrack"
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MediaStreamTrack {
+    pub id: String,
+    pub kind: String,     // "audio" or "video"
+    pub label: String,
+    pub enabled: bool,
+    pub muted: bool,
+    pub readonly: bool,
+    pub ready_state: String, // "live", "ended"
+}
+
+impl MediaStreamTrack {
+    pub fn new(kind: &str) -> Self {
+        Self {
+            id: format!("mock-{}-track", kind),
+            kind: kind.to_string(),
+            label: format!("Mock {} Track", kind),
+            enabled: true,
+            muted: false,
+            readonly: false,
+            ready_state: "live".to_string(),
+        }
+    }
+
+    pub fn stop(&mut self) {
+        println!("MediaStreamTrack.stop()");
+        self.ready_state = "ended".to_string();
+    }
+
+    pub fn clone(&self) -> Self {
+        Self {
+            id: format!("{}-clone", self.id),
+            kind: self.kind.clone(),
+            label: self.label.clone(),
+            enabled: self.enabled,
+            muted: self.muted,
+            readonly: self.readonly,
+            ready_state: self.ready_state.clone(),
+        }
+    }
+
+    pub fn addEventListener<F>(&mut self, event_type: &str, listener: F)
+    where
+        F: Fn(Event) + 'static,
+    {
+        println!("MediaStreamTrack.addEventListener({})", event_type);
+        // Events: "ended", "mute", "unmute"
+    }
+}
+
+// Media Constraints Types
+#[derive(Debug, Clone)]
+pub enum MediaTrackConstraints {
+    Bool(bool),
+    Object {
+        width: Option<u32>,
+        height: Option<u32>,
+        frame_rate: Option<f64>,
+        device_id: Option<String>,
+    }
+}
+
+impl MediaTrackConstraints {
+    pub fn new_bool(enabled: bool) -> Self {
+        Self::Bool(enabled)
+    }
+
+    pub fn new_video(width: Option<u32>, height: Option<u32>) -> Self {
+        Self::Object {
+            width,
+            height,
+            frame_rate: None,
+            device_id: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MediaStreamConstraints {
+    pub video: MediaTrackConstraints,
+    pub audio: MediaTrackConstraints,
+}
+
+impl MediaStreamConstraints {
+    pub fn new() -> Self {
+        Self {
+            video: MediaTrackConstraints::Bool(false),
+            audio: MediaTrackConstraints::Bool(false),
+        }
+    }
+
+    pub fn video_audio() -> Self {
+        Self {
+            video: MediaTrackConstraints::Bool(true),
+            audio: MediaTrackConstraints::Bool(true),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MediaDeviceInfo {
+    pub device_id: String,
+    pub kind: String,     // "audioinput", "audiooutput", "videoinput"
+    pub label: String,
+    pub group_id: String,
+}
+
+impl MediaDeviceInfo {
+    pub fn new(device_id: String, kind: String, label: String) -> Self {
+        Self {
+            device_id,
+            kind,
+            label,
+            group_id: "mock-group".to_string(),
+        }
+    }
+}
+
+pub struct MediaDevices;
+
+impl MediaDevices {
+    pub fn getUserMedia(&self, constraints: &MediaStreamConstraints) -> Result<MediaStream, String> {
+        println!("MediaDevices.getUserMedia()");
+        Ok(MediaStream::new())
+    }
+
+    pub fn getDisplayMedia(&self, constraints: &MediaStreamConstraints) -> Result<MediaStream, String> {
+        println!("MediaDevices.getDisplayMedia()");
+        Ok(MediaStream::new())
+    }
+
+    pub fn enumerateDevices(&self) -> Result<Vec<MediaDeviceInfo>, String> {
+        println!("MediaDevices.enumerateDevices()");
+        Ok(vec![
+            MediaDeviceInfo::new("mock-audio-input".to_string(), "audioinput".to_string(), "Mock Microphone".to_string()),
+            MediaDeviceInfo::new("mock-video-input".to_string(), "videoinput".to_string(), "Mock Camera".to_string()),
+        ])
+    }
+}
+
+// RTP Sender/Receiver Types
+#[derive(Debug, Clone)]
+pub struct RTCRtpSender {
+    pub track: Option<MediaStreamTrack>,
+}
+
+impl RTCRtpSender {
+    pub fn new(track: Option<MediaStreamTrack>) -> Self {
+        Self { track }
+    }
+
+    pub async fn replaceTrack(&mut self, track: Option<MediaStreamTrack>) -> Result<(), String> {
+        println!("RTCRtpSender.replaceTrack()");
+        self.track = track;
+        Ok(())
+    }
+
+    pub async fn getStats(&self) -> Result<RTCStatsReport, String> {
+        println!("RTCRtpSender.getStats()");
+        Ok(RTCStatsReport::new())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RTCRtpReceiver {
+    pub track: MediaStreamTrack,
+}
+
+impl RTCRtpReceiver {
+    pub fn new(track: MediaStreamTrack) -> Self {
+        Self { track }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RTCRtpTransceiver {
+    pub sender: RTCRtpSender,
+    pub receiver: RTCRtpReceiver,
+    pub direction: String, // "sendrecv", "sendonly", "recvonly", "inactive"
+}
+
+impl RTCRtpTransceiver {
+    pub fn new(sender: RTCRtpSender, receiver: RTCRtpReceiver) -> Self {
+        Self {
+            sender,
+            receiver,
+            direction: "sendrecv".to_string(),
+        }
+    }
+}
+
+// Stats API Types
+#[derive(Debug, Clone)]
+pub struct RTCStats {
+    pub id: String,
+    pub timestamp: f64,
+    pub type_: String, // "inbound-rtp", "outbound-rtp", "candidate-pair", etc.
+}
+
+impl RTCStats {
+    pub fn new(id: String, type_: String) -> Self {
+        Self {
+            id,
+            timestamp: 0.0,
+            type_,
+        }
+    }
+}
+
+pub struct RTCStatsReport {
+    // Map-like interface for stats
+}
+
+impl RTCStatsReport {
+    pub fn new() -> Self {
+        Self { }
+    }
+
+    pub fn get(&self, id: &str) -> Option<RTCStats> {
+        println!("RTCStatsReport.get({})", id);
+        None
+    }
+
+    pub fn values(&self) -> Vec<RTCStats> {
+        println!("RTCStatsReport.values()");
+        vec![]
+    }
+}
+
+// WebRTC-specific Event Types
+#[derive(Debug, Clone)]
+pub struct RTCPeerConnectionIceEvent {
+    pub candidate: Option<RTCIceCandidate>,
+    // Inherits from Event
+    pub type_: String,
+    pub target: Option<Element>,
+}
+
+impl RTCPeerConnectionIceEvent {
+    pub fn new(candidate: Option<RTCIceCandidate>) -> Self {
+        Self {
+            candidate,
+            type_: "icecandidate".to_string(),
+            target: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RTCTrackEvent {
+    pub receiver: RTCRtpReceiver,
+    pub track: MediaStreamTrack,
+    pub streams: Vec<MediaStream>,
+    pub transceiver: Option<RTCRtpTransceiver>,
+    // Inherits from Event
+    pub type_: String,
+    pub target: Option<Element>,
+}
+
+impl RTCTrackEvent {
+    pub fn new(receiver: RTCRtpReceiver, track: MediaStreamTrack, streams: Vec<MediaStream>) -> Self {
+        Self {
+            receiver,
+            track,
+            streams,
+            transceiver: None,
+            type_: "track".to_string(),
+            target: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RTCDataChannelEvent {
+    pub channel: RTCDataChannel,
+    // Inherits from Event
+    pub type_: String,
+    pub target: Option<Element>,
+}
+
+impl RTCDataChannelEvent {
+    pub fn new(channel: RTCDataChannel) -> Self {
+        Self {
+            channel,
+            type_: "datachannel".to_string(),
+            target: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RTCDataChannel {
+    pub label: String,
+    pub ordered: bool,
+    pub max_retransmits: Option<u16>,
+    pub max_packet_life_time: Option<u16>,
+    pub protocol: String,
+    pub negotiated: bool,
+    pub id: Option<u16>,
+    pub ready_state: String, // "connecting", "open", "closing", "closed"
+}
+
+impl RTCDataChannel {
+    pub fn new(label: String) -> Self {
+        Self {
+            label,
+            ordered: true,
+            max_retransmits: None,
+            max_packet_life_time: None,
+            protocol: String::new(),
+            negotiated: false,
+            id: None,
+            ready_state: "connecting".to_string(),
+        }
+    }
+
+    pub fn send(&self, data: &str) -> Result<(), String> {
+        println!("RTCDataChannel.send({})", data);
+        Ok(())
+    }
+
+    pub fn close(&mut self) {
+        println!("RTCDataChannel.close()");
+        self.ready_state = "closed".to_string();
+    }
+
+    pub fn addEventListener<F>(&mut self, event_type: &str, listener: F)
+    where
+        F: Fn(Event) + 'static,
+    {
+        println!("RTCDataChannel.addEventListener({})", event_type);
+        // Events: "open", "message", "error", "close"
+    }
+}
+
+// RTCPeerConnection - The main WebRTC interface
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RTCPeerConnection {
+    // Core state properties
+    pub connection_state: String, // "new", "connecting", "connected", "disconnected", "failed", "closed"
+    pub ice_connection_state: String,
+    pub signaling_state: String,
+}
+
+impl RTCPeerConnection {
+    pub fn new(configuration: &RTCConfiguration) -> Result<Self, String> {
+        println!("RTCPeerConnection.new() with {} ICE servers", configuration.ice_servers.len());
+        Ok(Self {
+            connection_state: "new".to_string(),
+            ice_connection_state: "new".to_string(),
+            signaling_state: "stable".to_string(),
+        })
+    }
+
+    // Session description methods
+    pub fn createOffer(&self) -> Result<RTCSessionDescription, String> {
+        println!("RTCPeerConnection.createOffer()");
+        Ok(RTCSessionDescription::new(
+            "offer".to_string(),
+            "v=0\r\no=- 123456789 123456789 IN IP4 0.0.0.0\r\n...".to_string()
+        ))
+    }
+
+    pub fn createAnswer(&self) -> Result<RTCSessionDescription, String> {
+        println!("RTCPeerConnection.createAnswer()");
+        Ok(RTCSessionDescription::new(
+            "answer".to_string(),
+            "v=0\r\no=- 987654321 987654321 IN IP4 0.0.0.0\r\n...".to_string()
+        ))
+    }
+
+    pub fn setLocalDescription(&mut self, description: &RTCSessionDescription) -> Result<(), String> {
+        println!("RTCPeerConnection.setLocalDescription({})", description.type_);
+        self.signaling_state = match description.type_.as_str() {
+            "offer" => "have-local-offer",
+            "answer" => "stable",
+            _ => "stable",
+        }.to_string();
+        Ok(())
+    }
+
+    pub fn setRemoteDescription(&mut self, description: &RTCSessionDescription) -> Result<(), String> {
+        println!("RTCPeerConnection.setRemoteDescription({})", description.type_);
+        self.signaling_state = match description.type_.as_str() {
+            "offer" => "have-remote-offer",
+            "answer" => "stable",
+            _ => "stable",
+        }.to_string();
+        Ok(())
+    }
+
+    // ICE candidate methods
+    pub fn addIceCandidate(&mut self, candidate: &RTCIceCandidate) -> Result<(), String> {
+        println!("RTCPeerConnection.addIceCandidate()");
+        Ok(())
+    }
+
+    // Media track methods
+    pub fn addTrack(&mut self, track: MediaStreamTrack, stream: MediaStream) -> RTCRtpSender {
+        println!("RTCPeerConnection.addTrack({}, {})", track.id, stream.id);
+        RTCRtpSender::new(Some(track))
+    }
+
+    pub fn removeTrack(&mut self, sender: &RTCRtpSender) -> Result<(), String> {
+        println!("RTCPeerConnection.removeTrack()");
+        Ok(())
+    }
+
+    // Event handlers (addEventListener with specific event types)
+    pub fn addEventListener<F>(&mut self, event_type: &str, listener: F)
+    where
+        F: Fn(Event) + 'static,
+    {
+        println!("RTCPeerConnection.addEventListener({})", event_type);
+        // Events: "icecandidate", "track", "connectionstatechange", "icecandidateerror"
+    }
+
+    // Connection management
+    pub fn close(&mut self) {
+        println!("RTCPeerConnection.close()");
+        self.connection_state = "closed".to_string();
+        self.ice_connection_state = "closed".to_string();
+        self.signaling_state = "closed".to_string();
     }
 }
