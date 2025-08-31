@@ -748,6 +748,7 @@ impl History {
 
 // Event interface
 #[js_type]
+#[derive(Debug, Clone)]
 pub struct Event {
     pub r#type: String,
     pub bubbles: bool,
@@ -1697,7 +1698,10 @@ impl WebSocket {
         println!("WebSocket.close");
     }
 
-    pub fn addEventListener(&self, _event_type: &str, _callback: fn()) {
+    pub fn addEventListener<F>(&mut self, event_type: &str, listener: F)
+    where
+        F: Fn(MessageEvent) + 'static,
+    {
         // Mock implementation for transpilation
     }
 }
