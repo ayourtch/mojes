@@ -22,6 +22,8 @@ pub struct TranspilerState {
     temp_var_counter: usize,
     /// Current struct name for Self resolution
     current_struct_name: Option<String>,
+    /// Whether we're currently in a static method context
+    is_in_static_method: bool,
 }
 
 #[derive(Copy, Eq, PartialEq, Clone, Debug)]
@@ -46,6 +48,7 @@ impl TranspilerState {
             warnings: Vec::new(),
             temp_var_counter: 0,
             current_struct_name: None,
+            is_in_static_method: false,
         }
     }
 
@@ -57,6 +60,16 @@ impl TranspilerState {
     /// Get the current struct name
     pub fn get_current_struct_name(&self) -> Option<&String> {
         self.current_struct_name.as_ref()
+    }
+
+    /// Set whether we're in a static method context
+    pub fn set_in_static_method(&mut self, is_static: bool) {
+        self.is_in_static_method = is_static;
+    }
+
+    /// Check if we're in a static method context
+    pub fn is_in_static_method(&self) -> bool {
+        self.is_in_static_method
     }
     /// Convert Pat to Param for function parameters
     pub fn pat_to_param(&self, pat: js::Pat) -> js::Param {
@@ -453,8 +466,12 @@ fn generate_js_method(
         })
         .collect();
 
+    // Set static method context before converting method body
+    state.set_in_static_method(is_static);
     // Convert method body to JavaScript
     let body_stmts = rust_block_to_js_with_state(BlockAction::Return, &method.block, state)?;
+    // Reset static method context after conversion
+    state.set_in_static_method(false);
     let body = js::BlockStmt {
         span: DUMMY_SP,
         stmts: body_stmts,
@@ -4375,29 +4392,107 @@ fn handle_struct_expr(
     } else {
         // Check if this is a Self struct expression
         if struct_name == "Self" && state.get_current_struct_name().is_some() {
-            // Self { ... } should create an object literal with named fields
-            let mut props = Vec::new();
-            
-            // Convert named fields to object properties
-            for field in &struct_expr.fields {
-                if let syn::Member::Named(field_name) = &field.member {
-                    let field_name_str = field_name.to_string();
-                    let field_value = rust_expr_to_js_with_state(&field.expr, state)?;
-                    
-                    props.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
-                        js::KeyValueProp {
-                            key: js::PropName::Ident(state.mk_ident_name(&field_name_str)),
-                            value: Box::new(field_value),
-                        },
-                    ))));
+            // Check if we're in a static method context
+            if state.is_in_static_method() {
+                // In static methods, Self { ... } should use constructor + field assignment
+                // We'll use an IIFE to create the object and assign fields
+                let struct_name = state.get_current_struct_name().unwrap().clone();
+                
+                // Create constructor call: new StructName()
+                let constructor_call = js::Expr::New(js::NewExpr {
+                    span: DUMMY_SP,
+                    callee: Box::new(js::Expr::Ident(state.mk_ident(&struct_name))),
+                    args: Some(vec![]),
+                    type_args: None,
+                    ctxt: SyntaxContext::empty(),
+                });
+                
+                // Create variable declaration: const obj = new StructName();
+                let obj_var = state.mk_var_decl("obj", Some(constructor_call), true);
+                
+                // Create field assignments: obj.field = value;
+                let mut assignment_stmts = vec![obj_var];
+                for field in &struct_expr.fields {
+                    if let syn::Member::Named(field_name) = &field.member {
+                        let field_name_str = field_name.to_string();
+                        let field_value = rust_expr_to_js_with_state(&field.expr, state)?;
+                        
+                        // Create obj.field assignment
+                        let obj_access = state.mk_member_expr(
+                            js::Expr::Ident(state.mk_ident("obj")),
+                            &field_name_str
+                        );
+                        let assignment = js::Expr::Assign(js::AssignExpr {
+                            span: DUMMY_SP,
+                            op: js::AssignOp::Assign,
+                            left: state.expr_to_assign_target(obj_access)?,
+                            right: Box::new(field_value),
+                        });
+                        assignment_stmts.push(js::Stmt::Expr(js::ExprStmt {
+                            span: DUMMY_SP,
+                            expr: Box::new(assignment),
+                        }));
+                    }
                 }
+                
+                // Add return statement: return obj;
+                assignment_stmts.push(js::Stmt::Return(js::ReturnStmt {
+                    span: DUMMY_SP,
+                    arg: Some(Box::new(js::Expr::Ident(state.mk_ident("obj")))),
+                }));
+                
+                // Create IIFE: (() => { ... })()
+                let iife_func = js::ArrowExpr {
+                    span: DUMMY_SP,
+                    params: vec![],
+                    body: Box::new(js::BlockStmtOrExpr::BlockStmt(js::BlockStmt {
+                        span: DUMMY_SP,
+                        stmts: assignment_stmts,
+                        ctxt: SyntaxContext::empty(),
+                    })),
+                    is_async: false,
+                    is_generator: false,
+                    type_params: None,
+                    return_type: None,
+                    ctxt: SyntaxContext::empty(),
+                };
+                
+                // Call the IIFE
+                Ok(js::Expr::Call(js::CallExpr {
+                    span: DUMMY_SP,
+                    callee: js::Callee::Expr(Box::new(js::Expr::Paren(js::ParenExpr {
+                        span: DUMMY_SP,
+                        expr: Box::new(js::Expr::Arrow(iife_func)),
+                    }))),
+                    args: vec![],
+                    type_args: None,
+                    ctxt: SyntaxContext::empty(),
+                }))
+            } else {
+                // In non-static methods, Self { ... } should create an object literal with named fields
+                let mut props = Vec::new();
+                
+                // Convert named fields to object properties
+                for field in &struct_expr.fields {
+                    if let syn::Member::Named(field_name) = &field.member {
+                        let field_name_str = field_name.to_string();
+                        let field_value = rust_expr_to_js_with_state(&field.expr, state)?;
+                        
+                        props.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+                            js::KeyValueProp {
+                                key: js::PropName::Ident(state.mk_ident_name(&field_name_str)),
+                                value: Box::new(field_value),
+                            },
+                        ))));
+                    }
+                }
+                
+                // Return object literal for Self
+                Ok(js::Expr::Object(js::ObjectLit {
+                    span: DUMMY_SP,
+                    props,
+                }))
             }
-            
-            // Return object literal for Self
-            Ok(js::Expr::Object(js::ObjectLit {
-                span: DUMMY_SP,
-                props,
-            }))
         } else {
             // This is a regular struct, use original constructor pattern
             // Convert field initializers to constructor arguments
