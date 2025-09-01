@@ -78,7 +78,7 @@ pub fn Number(s: &str) -> f64 {
 // Core DOM Element representation
 // #[js_type]
 // DOMTokenList represents classList in the DOM API
-#[js_type]
+// #[js_type] - Browser built-in, do not export
 #[derive(Clone, Debug)]
 pub struct DOMTokenList {
     pub classes: Vec<String>,
@@ -435,7 +435,7 @@ impl Element {
 }
 
 // Document interface
-#[js_type]
+// #[js_type] - Browser built-in, do not export
 pub struct Document {
    pub readyState: &'static str,
 }
@@ -539,7 +539,7 @@ impl Document {
 }
 
 // Console interface
-#[js_type]
+// #[js_type] - Browser built-in, do not export  
 pub struct Console {}
 
 impl Console {
@@ -605,7 +605,7 @@ impl Console {
 }
 
 // Window interface
-#[js_type]
+// #[js_type] - Browser built-in, do not export
 pub struct Window {}
 
 impl Window {
@@ -747,7 +747,7 @@ impl Window {
 }
 
 // CSS Style Declaration
-#[js_type]
+// #[js_type] - Browser built-in, do not export
 pub struct CSSStyleDeclaration {
     pub color: String,
     pub backgroundColor: String,
@@ -849,7 +849,7 @@ impl CSSStyleDeclaration {
 }
 
 // DOMRect interface
-#[js_type]
+// #[js_type] - Browser built-in, do not export
 pub struct DOMRect {
     pub x: f64,
     pub y: f64,
@@ -877,7 +877,7 @@ impl DOMRect {
 }
 
 // Location interface
-#[js_type]
+// #[js_type] - Browser built-in, do not export
 pub struct Location {
     pub href: String,
     pub protocol: String,
@@ -939,7 +939,7 @@ impl Location {
 }
 
 // Navigator interface
-#[js_type]
+// #[js_type] - Browser built-in, do not export
 pub struct Navigator {
     pub userAgent: String,
     pub language: String,
@@ -990,7 +990,7 @@ impl Navigator {
 }
 
 // History interface
-#[js_type]
+// #[js_type] - Browser built-in, do not export
 pub struct History {
     pub length: u32,
     pub state: String,
@@ -1029,7 +1029,7 @@ impl History {
 }
 
 // Event interface
-#[js_type]
+// #[js_type] - Browser built-in, do not export
 #[derive(Debug, Clone)]
 pub struct Event {
     pub r#type: String,
@@ -1076,6 +1076,7 @@ impl Event {
 }
 
 // MessageEvent interface for WebSocket messages
+// #[js_type] - Browser built-in, do not export
 #[derive(Clone, Debug)]
 pub struct MessageEvent {
     pub data: String,
@@ -1805,7 +1806,7 @@ impl XMLHttpRequest {
 }
 
 // XMLHttpRequestUpload interface for upload progress tracking
-#[js_type]
+// #[js_type] - Browser built-in, do not export
 pub struct XMLHttpRequestUpload {
     // Event handlers for upload events using Box<dyn Fn()>
     onloadstart: Option<Box<dyn Fn()>>,
@@ -1870,7 +1871,7 @@ impl XMLHttpRequestUpload {
 }
 
 // ProgressEvent interface for progress tracking
-#[js_type]
+// #[js_type] - Browser built-in, do not export
 pub struct ProgressEvent {
     pub lengthComputable: bool,
     pub loaded: u64,
@@ -1991,7 +1992,7 @@ impl WebSocket {
 // =============================================================================
 
 // Core WebRTC Configuration Types
-#[js_type]
+#[js_type] // Safe to export - configuration dictionary, not a browser constructor
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RTCIceServer {
     pub urls: Vec<String>,
@@ -2000,7 +2001,7 @@ pub struct RTCIceServer {
     pub credential_type: Option<String>, // "password", "oauth"
 }
 
-#[js_object]
+#[js_object] // Safe to export - helper constructors for configuration dictionary
 impl RTCIceServer {
     pub fn new(urls: Vec<String>) -> Self {
         Self {
@@ -2021,7 +2022,7 @@ impl RTCIceServer {
     }
 }
 
-#[js_type]
+#[js_type] // Safe to export - configuration dictionary, not a browser constructor
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RTCConfiguration {
     pub iceServers: Vec<RTCIceServer>,
@@ -2031,7 +2032,7 @@ pub struct RTCConfiguration {
     pub iceCandidatePoolSize: Option<u32>, 
 }
 
-#[js_object]
+#[js_object] // Safe to export - helper constructors for configuration dictionary
 impl RTCConfiguration {
     pub fn new() -> Self {
         Self {
@@ -2068,7 +2069,7 @@ impl RTCSessionDescription {
 }
 
 // ICE Candidate Types
-#[js_type]
+// #[js_type] - Browser built-in WebRTC type, do not export
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RTCIceCandidateInit {
     pub candidate: String,
@@ -2076,7 +2077,7 @@ pub struct RTCIceCandidateInit {
     pub sdpMLineIndex: Option<u16>,
 }
 
-#[js_object]
+// #[js_object] - Browser built-in, do not export constructor
 impl RTCIceCandidateInit {
     pub fn new(candidate: String) -> Self {
         Self {
@@ -2103,7 +2104,7 @@ impl RTCIceCandidateInit {
     }
 }
 
-#[js_type]
+// #[js_type] - Browser built-in WebRTC type, do not export
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RTCIceCandidate {
     pub candidate: String,        // ICE candidate string
@@ -2118,7 +2119,7 @@ pub struct RTCIceCandidate {
     pub r#type: Option<String>,    // "host", "srflx", "prflx", "relay"
 }
 
-#[js_object]
+// #[js_object] - Browser built-in constructor, do not export
 impl RTCIceCandidate {
     pub fn new(init: RTCIceCandidateInit) -> Self {
         Self {
@@ -2250,7 +2251,7 @@ impl MediaStreamTrack {
 }
 
 // Media Constraints Types
-#[js_type]
+#[js_type] // Safe to export - configuration dictionary, not a browser constructor
 #[derive(Debug, Clone)]
 pub enum MediaTrackConstraints {
     Bool(bool),
@@ -2277,7 +2278,7 @@ impl MediaTrackConstraints {
     }
 }
 
-#[js_type]
+#[js_type] // Safe to export - configuration dictionary, not a browser constructor  
 #[derive(Debug, Clone)]
 pub struct MediaStreamConstraints {
     pub video: MediaTrackConstraints,
@@ -2432,6 +2433,7 @@ impl RTCStatsReport {
 }
 
 // WebRTC-specific Event Types
+// #[js_type] - Browser built-in, do not export
 #[derive(Debug, Clone)]
 pub struct RTCPeerConnectionIceEvent {
     pub candidate: Option<RTCIceCandidate>,
@@ -2450,6 +2452,7 @@ impl RTCPeerConnectionIceEvent {
     }
 }
 
+// #[js_type] - Browser built-in, do not export
 #[derive(Debug, Clone)]
 pub struct RTCTrackEvent {
     pub receiver: RTCRtpReceiver,
@@ -2474,6 +2477,7 @@ impl RTCTrackEvent {
     }
 }
 
+// #[js_type] - Browser built-in, do not export
 #[derive(Debug, Clone)]
 pub struct RTCDataChannelEvent {
     pub channel: RTCDataChannel,
@@ -2549,19 +2553,21 @@ impl RTCDataChannel {
     }
 }
 
-// RTCPeerConnection - The main WebRTC interface
+// RTCPeerConnection - The main WebRTC interface  
+// #[js_type] - Browser built-in WebRTC type, do not export
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RTCPeerConnection {
     // Core state properties
     pub connectionState: String, // "new", "connecting", "connected", "disconnected", "failed", "closed"
     pub iceConnectionState: String,
     pub signalingState: String,
+    pub iceGatheringState: String, // "new", "gathering", "complete"
 }
 
 // WebRTC event struct - superset of all possible WebRTC event properties
-  #[js_type]
-  #[derive(Debug, Clone, Default)]
-  pub struct RTCPeerConnectionEvent {
+// #[js_type] - Internal Rust workaround, do not export to avoid browser conflicts
+#[derive(Debug, Clone, Default)]
+pub struct RTCPeerConnectionEvent {
       // For icecandidate events
       pub candidate: Option<RTCIceCandidate>,
       pub url: Option<String>,
@@ -2587,6 +2593,7 @@ impl RTCPeerConnection {
             connectionState: "new".to_string(),
             iceConnectionState: "new".to_string(),
             signalingState: "stable".to_string(),
+            iceGatheringState: "new".to_string(),
         }
     }
 
@@ -2653,5 +2660,6 @@ impl RTCPeerConnection {
         self.connectionState = "closed".to_string();
         self.iceConnectionState = "closed".to_string();
         self.signalingState = "closed".to_string();
+        self.iceGatheringState = "complete".to_string();
     }
 }
