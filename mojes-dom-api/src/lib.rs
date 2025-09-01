@@ -2569,6 +2569,8 @@ pub struct RTCPeerConnection {
     pub iceConnectionState: String,
     pub signalingState: String,
     pub iceGatheringState: String, // "new", "gathering", "complete"
+    pub localDescription: Option<RTCSessionDescription>,
+    pub remoteDescription: Option<RTCSessionDescription>,
 }
 
 // WebRTC event struct - superset of all possible WebRTC event properties
@@ -2605,6 +2607,8 @@ impl RTCPeerConnection {
             iceConnectionState: "new".to_string(),
             signalingState: "stable".to_string(),
             iceGatheringState: "new".to_string(),
+            localDescription: None,
+            remoteDescription: None,
         }
     }
 
