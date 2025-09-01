@@ -1972,6 +1972,14 @@ fn handle_method_call(
             Ok(state.mk_call_expr(state.mk_member_expr(receiver, "trimStart"), js_args))
         }
         "trim_end" => Ok(state.mk_call_expr(state.mk_member_expr(receiver, "trimEnd"), js_args)),
+        "is_empty" => {
+            // Convert .is_empty() to .length === 0
+            Ok(state.mk_binary_expr(
+                state.mk_member_expr(receiver, "length"),
+                js::BinaryOp::EqEqEq,
+                state.mk_num_lit(0.0)
+            ))
+        }
         "remove" => {
             // vec.remove(index) -> vec.splice(index, 1)[0]
             if js_args.len() == 1 {
@@ -4578,9 +4586,15 @@ fn handle_match_expr(
     let mut if_chain: Option<js::Stmt> = None;
 
     for (i, arm) in match_expr.arms.iter().enumerate() {
+        // Create a separate scope for each match arm to avoid variable conflicts
+        state.enter_scope();
+        
         let (condition, mut binding_stmts) = handle_pattern_binding(&arm.pat, &temp_var, state)?;
         // Use BlockAction::Return so that final expressions in match arms are properly returned
         let body_expr = rust_expr_to_js_with_action_and_state(BlockAction::Return, &arm.body, state)?;
+
+        // Exit the scope after processing this arm
+        state.exit_scope();
 
         // Combine binding statements with return statement
         binding_stmts.push(state.mk_return_stmt(Some(body_expr)));
