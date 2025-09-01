@@ -4035,6 +4035,75 @@ fn convert_for_to_stmt(
                 type_ann: None,
             });
 
+            // For tuple destructuring, we likely need .entries() for Maps/Objects
+            // Use an IIFE to universally handle Maps, Objects, and Arrays
+            let enhanced_iterable = if var_names.len() == 2 {
+                // Create IIFE: ((obj) => obj && typeof obj.entries === 'function' ? obj.entries() : Object.entries(obj))(iterable)
+                let param = js::Param {
+                    span: DUMMY_SP,
+                    decorators: vec![],
+                    pat: js::Pat::Ident(js::BindingIdent {
+                        id: state.mk_ident("obj"),
+                        type_ann: None,
+                    }),
+                };
+
+                let condition = state.mk_binary_expr(
+                    js::Expr::Ident(state.mk_ident("obj")),
+                    js::BinaryOp::LogicalAnd,
+                    state.mk_binary_expr(
+                        js::Expr::Unary(js::UnaryExpr {
+                            span: DUMMY_SP,
+                            op: js::UnaryOp::TypeOf,
+                            arg: Box::new(state.mk_member_expr(js::Expr::Ident(state.mk_ident("obj")), "entries")),
+                        }),
+                        js::BinaryOp::EqEqEq,
+                        state.mk_str_lit("function")
+                    )
+                );
+
+                let fallback = state.mk_call_expr(
+                    state.mk_member_expr(js::Expr::Ident(state.mk_ident("Object")), "entries"),
+                    vec![js::Expr::Ident(state.mk_ident("obj"))]
+                );
+
+                let ternary = js::Expr::Cond(js::CondExpr {
+                    span: DUMMY_SP,
+                    test: Box::new(condition),
+                    cons: Box::new(state.mk_call_expr(
+                        state.mk_member_expr(js::Expr::Ident(state.mk_ident("obj")), "entries"),
+                        vec![]
+                    )),
+                    alt: Box::new(fallback),
+                });
+
+                let arrow_fn = js::Expr::Arrow(js::ArrowExpr {
+                    span: DUMMY_SP,
+                    params: vec![js::Pat::Ident(js::BindingIdent {
+                        id: state.mk_ident("obj"),
+                        type_ann: None,
+                    })],
+                    body: Box::new(js::BlockStmtOrExpr::Expr(Box::new(ternary))),
+                    is_async: false,
+                    is_generator: false,
+                    type_params: None,
+                    return_type: None,
+                    ctxt: SyntaxContext::empty(),
+                });
+
+                // Call the IIFE with the iterable - wrap arrow function in parentheses
+                state.mk_call_expr(
+                    js::Expr::Paren(js::ParenExpr {
+                        span: DUMMY_SP,
+                        expr: Box::new(arrow_fn),
+                    }),
+                    vec![iterable]
+                )
+            } else {
+                // For other tuple patterns, use original iterable
+                iterable
+            };
+
             // Create for...of loop with destructuring
             Ok(js::Stmt::ForOf(js::ForOfStmt {
                 span: DUMMY_SP,
@@ -4051,7 +4120,7 @@ fn convert_for_to_stmt(
                     }],
                     ctxt: SyntaxContext::empty(),
                 })),
-                right: Box::new(iterable),
+                right: Box::new(enhanced_iterable),
                 body: Box::new(js::Stmt::Block(js::BlockStmt {
                     span: DUMMY_SP,
                     stmts: body_stmts,
