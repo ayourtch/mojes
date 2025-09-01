@@ -2069,7 +2069,7 @@ impl RTCSessionDescription {
 }
 
 // ICE Candidate Types
-// #[js_type] - Browser built-in WebRTC type, do not export
+#[js_type] // Configuration dictionary - safe to export
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RTCIceCandidateInit {
     pub candidate: String,
@@ -2077,7 +2077,7 @@ pub struct RTCIceCandidateInit {
     pub sdpMLineIndex: Option<u16>,
 }
 
-// #[js_object] - Browser built-in, do not export constructor
+#[js_object] // Configuration dictionary methods - safe to export
 impl RTCIceCandidateInit {
     pub fn new(candidate: String) -> Self {
         Self {
