@@ -2054,13 +2054,13 @@ impl RTCConfiguration {
 // Session Description Types
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RTCSessionDescription {
-    pub type_: String, // "offer", "answer", "pranswer", "rollback"
+    pub r#type: String, // "offer", "answer", "pranswer", "rollback"
     pub sdp: String,   // SDP content
 }
 
 impl RTCSessionDescription {
     pub fn new(type_: String, sdp: String) -> Self {
-        Self { type_, sdp }
+        Self { r#type: type_, sdp }
     }
 }
 
@@ -2543,6 +2543,28 @@ pub struct RTCPeerConnection {
     pub signaling_state: String,
 }
 
+// WebRTC event struct - superset of all possible WebRTC event properties
+  #[js_type]
+  #[derive(Debug, Clone, Default)]
+  pub struct RTCPeerConnectionEvent {
+      // For icecandidate events
+      pub candidate: Option<RTCIceCandidate>,
+      pub url: Option<String>,
+
+      // For track events  
+      pub receiver: Option<RTCRtpReceiver>,
+      pub streams: Option<Vec<MediaStream>>,
+      pub track: Option<MediaStreamTrack>,
+      pub transceiver: Option<RTCRtpTransceiver>,
+
+      // For datachannel events
+      pub channel: Option<RTCDataChannel>,
+
+      // For connection state events (these are usually just the event type)
+      pub event_type: Option<String>,
+  }
+
+
 impl RTCPeerConnection {
     pub fn new(configuration: &RTCConfiguration) -> Self {
         println!("RTCPeerConnection.new() with {} ICE servers", configuration.ice_servers.len());
@@ -2565,14 +2587,14 @@ impl RTCPeerConnection {
     }
 
     pub fn setLocalDescription(&self, description: &RTCSessionDescription) -> Promise<()> {
-        println!("RTCPeerConnection.setLocalDescription({})", description.type_);
+        println!("RTCPeerConnection.setLocalDescription({})", description.r#type);
         // Note: In real WebRTC, this would update the connection state
         // but for Mojes transpilation, the browser handles state changes
         Promise::new()
     }
 
     pub fn setRemoteDescription(&self, description: &RTCSessionDescription) -> Promise<()> {
-        println!("RTCPeerConnection.setRemoteDescription({})", description.type_);
+        println!("RTCPeerConnection.setRemoteDescription({})", description.r#type);
         // Note: In real WebRTC, this would update the connection state
         // but for Mojes transpilation, the browser handles state changes
         Promise::new()
@@ -2598,7 +2620,7 @@ impl RTCPeerConnection {
     // Event handlers (addEventListener with specific event types)
     pub fn addEventListener<F>(&self, event_type: &str, listener: F)
     where
-        F: Fn(Event) + 'static,
+        F: Fn(RTCPeerConnectionEvent) + 'static,
     {
         println!("RTCPeerConnection.addEventListener({})", event_type);
         // Events: "icecandidate", "track", "connectionstatechange", "icecandidateerror"
