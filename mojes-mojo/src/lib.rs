@@ -115,18 +115,51 @@ impl TranspilerState {
         self.scope_stack.pop();
     }
 
-    pub fn declare_variable(&mut self, rust_name: String, js_name: String, is_mutable: bool) {
+    pub fn declare_variable(&mut self, rust_name: String, js_name: String, is_mutable: bool) -> String {
+        // Check for conflicts and generate a unique name if needed
+        let unique_js_name = self.ensure_unique_js_name(&js_name);
+        
         if let Some(current_scope) = self.scope_stack.last_mut() {
-            current_scope.insert(rust_name.clone(), js_name.clone());
+            current_scope.insert(rust_name.clone(), unique_js_name.clone());
         }
         self.symbol_table.insert(
             rust_name,
             SymbolInfo {
-                js_name,
+                js_name: unique_js_name.clone(),
                 rust_type: "unknown".to_string(),
                 is_mutable,
             },
         );
+        
+        // Return the unique name so caller can use it
+        unique_js_name
+    }
+
+    /// Ensure the JavaScript variable name is unique in the current scope chain
+    fn ensure_unique_js_name(&self, proposed_name: &str) -> String {
+        let mut candidate_name = proposed_name.to_string();
+        let mut counter = 1;
+        
+        // Check if the name conflicts with any existing variable in any scope
+        while self.js_name_exists_in_scope_chain(&candidate_name) {
+            candidate_name = format!("{}_{}", proposed_name, counter);
+            counter += 1;
+        }
+        
+        candidate_name
+    }
+    
+    /// Check if a JavaScript variable name exists anywhere in the scope chain
+    fn js_name_exists_in_scope_chain(&self, js_name: &str) -> bool {
+        // Check all scopes from innermost to outermost
+        for scope in self.scope_stack.iter().rev() {
+            for existing_js_name in scope.values() {
+                if existing_js_name == js_name {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     pub fn resolve_variable(&self, rust_name: &str) -> Option<String> {
@@ -454,7 +487,7 @@ fn generate_js_method(
         .iter()
         .any(|arg| matches!(arg, FnArg::Receiver(_)));
 
-    // Extract non-self parameters
+    // Extract non-self parameters (don't register in scope yet - will be done in function body)
     let params: Vec<js::Pat> = sig
         .inputs
         .iter()
@@ -463,8 +496,11 @@ fn generate_js_method(
                 FnArg::Receiver(_) => None, // Skip self
                 FnArg::Typed(pat_type) => {
                     if let Pat::Ident(pat_ident) = &*pat_type.pat {
+                        let param_name = pat_ident.ident.to_string();
+                        let js_param_name = escape_js_identifier(&param_name);
+                        
                         Some(js::Pat::Ident(js::BindingIdent {
-                            id: state.mk_ident(&pat_ident.ident.to_string()),
+                            id: state.mk_ident(&js_param_name),
                             type_ann: None,
                         }))
                     } else {
@@ -475,10 +511,30 @@ fn generate_js_method(
         })
         .collect();
 
+    // Collect parameter information for scope registration
+    let param_info: Vec<(String, String)> = sig
+        .inputs
+        .iter()
+        .filter_map(|arg| {
+            match arg {
+                FnArg::Receiver(_) => None,
+                FnArg::Typed(pat_type) => {
+                    if let Pat::Ident(pat_ident) = &*pat_type.pat {
+                        let param_name = pat_ident.ident.to_string();
+                        let js_param_name = escape_js_identifier(&param_name);
+                        Some((param_name, js_param_name))
+                    } else {
+                        None
+                    }
+                }
+            }
+        })
+        .collect();
+
     // Set static method context before converting method body
     state.set_in_static_method(is_static);
-    // Convert method body to JavaScript
-    let body_stmts = rust_block_to_js_with_state(BlockAction::Return, &method.block, state)?;
+    // Convert method body to JavaScript with parameter registration
+    let body_stmts = rust_block_to_js_with_params_and_state(BlockAction::Return, &method.block, &param_info, state)?;
     // Reset static method context after conversion
     state.set_in_static_method(false);
     let body = js::BlockStmt {
@@ -678,10 +734,10 @@ fn convert_if_let_some_to_stmt(
         if let Pat::Ident(pat_ident) = inner_pat {
             let var_name = pat_ident.ident.to_string();
             let js_var_name = escape_js_identifier(&var_name);
-            state.declare_variable(var_name, js_var_name.clone(), false);
+            let unique_js_var_name = state.declare_variable(var_name, js_var_name, false);
 
             // Add: const x = matched_expr;
-            consequent_stmts.push(state.mk_var_decl(&js_var_name, Some(matched_expr), true));
+            consequent_stmts.push(state.mk_var_decl(&unique_js_var_name, Some(matched_expr), true));
         }
     }
 
@@ -955,6 +1011,16 @@ pub fn rust_block_to_js_with_state(
     block: &Block,
     state: &mut TranspilerState,
 ) -> Result<Vec<js::Stmt>, String> {
+    rust_block_to_js_with_params_and_state(block_action, block, &[], state)
+}
+
+/// Convert Rust block to JavaScript statements with function parameters
+pub fn rust_block_to_js_with_params_and_state(
+    block_action: BlockAction,
+    block: &Block,
+    params: &[(String, String)], // (rust_name, js_name) pairs
+    state: &mut TranspilerState,
+) -> Result<Vec<js::Stmt>, String> {
     let mut js_stmts = Vec::new();
     debug_print!("DEBUG BLK: {:?} {:?}", &block_action, &block);
     if block_action == BlockAction::NoReturn {
@@ -962,6 +1028,11 @@ pub fn rust_block_to_js_with_state(
     }
 
     state.enter_scope();
+    
+    // Register function parameters in the function body scope
+    for (rust_name, js_name) in params {
+        state.declare_variable(rust_name.clone(), js_name.clone(), false);
+    }
 
     for stmt in &block.stmts {
         match stmt {
@@ -1062,7 +1133,7 @@ fn handle_function_definition(
     let func_name = item_fn.sig.ident.to_string();
     let js_func_name = escape_js_identifier(&func_name);
 
-    // Convert parameters
+    // Convert parameters (don't register in scope yet - will be done in function body)
     let params: Vec<js::Pat> = item_fn
         .sig
         .inputs
@@ -1086,8 +1157,29 @@ fn handle_function_definition(
         })
         .collect();
 
-    // Convert function body
-    let body_stmts = rust_block_to_js_with_state(BlockAction::Return, &item_fn.block, state)?;
+    // Collect parameter information for scope registration
+    let param_info: Vec<(String, String)> = item_fn
+        .sig
+        .inputs
+        .iter()
+        .filter_map(|arg| {
+            match arg {
+                syn::FnArg::Receiver(_) => None,
+                syn::FnArg::Typed(pat_type) => {
+                    if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
+                        let param_name = pat_ident.ident.to_string();
+                        let js_param_name = escape_js_identifier(&param_name);
+                        Some((param_name, js_param_name))
+                    } else {
+                        None
+                    }
+                }
+            }
+        })
+        .collect();
+
+    // Convert function body with parameter registration
+    let body_stmts = rust_block_to_js_with_params_and_state(BlockAction::Return, &item_fn.block, &param_info, state)?;
 
     let function_body = js::BlockStmt {
         span: DUMMY_SP,
@@ -2492,9 +2584,9 @@ fn handle_local_statement(
                 let js_var_name = escape_js_identifier(&var_name);
                 let is_mutable = pat_ident.mutability.is_some();
 
-                state.declare_variable(var_name, js_var_name.clone(), is_mutable);
+                let unique_js_var_name = state.declare_variable(var_name, js_var_name, is_mutable);
 
-                Ok(state.mk_var_decl(&js_var_name, Some(init_expr), !is_mutable))
+                Ok(state.mk_var_decl(&unique_js_var_name, Some(init_expr), !is_mutable))
             }
             Pat::Type(type_pat) => {
                 // Handle typed patterns like `let x: i32 = 23;`
@@ -2505,9 +2597,9 @@ fn handle_local_statement(
                         let js_var_name = escape_js_identifier(&var_name);
                         let is_mutable = pat_ident.mutability.is_some();
 
-                        state.declare_variable(var_name, js_var_name.clone(), is_mutable);
+                        let unique_js_var_name = state.declare_variable(var_name, js_var_name, is_mutable);
 
-                        Ok(state.mk_var_decl(&js_var_name, Some(init_expr), !is_mutable))
+                        Ok(state.mk_var_decl(&unique_js_var_name, Some(init_expr), !is_mutable))
                     }
                     _ => {
                         // This is a simplified approach - you might want more sophisticated handling
@@ -2540,9 +2632,9 @@ fn handle_local_statement(
                         .iter()
                         .map(|name| {
                             let js_name = escape_js_identifier(name);
-                            state.declare_variable(name.clone(), js_name.clone(), false);
+                            let unique_js_name = state.declare_variable(name.clone(), js_name, false);
                             Some(js::Pat::Ident(js::BindingIdent {
-                                id: state.mk_ident(&js_name),
+                                id: state.mk_ident(&unique_js_name),
                                 type_ann: None,
                             }))
                         })
@@ -2585,12 +2677,12 @@ fn handle_local_statement(
                         .iter()
                         .map(|name| {
                             let js_name = escape_js_identifier(name);
-                            state.declare_variable(name.clone(), js_name.clone(), false);
+                            let unique_js_name = state.declare_variable(name.clone(), js_name, false);
                             // Use shorthand property syntax for destructuring
                             js::ObjectPatProp::Assign(js::AssignPatProp {
                                 span: DUMMY_SP,
                                 key: js::BindingIdent {
-                                    id: state.mk_ident(&js_name),
+                                    id: state.mk_ident(&unique_js_name),
                                     type_ann: None,
                                 },
                                 value: None, // None means shorthand syntax
@@ -2623,9 +2715,9 @@ fn handle_local_statement(
             let js_var_name = escape_js_identifier(&var_name);
             let is_mutable = pat_ident.mutability.is_some();
 
-            state.declare_variable(var_name, js_var_name.clone(), is_mutable);
+            let unique_js_var_name = state.declare_variable(var_name, js_var_name, is_mutable);
 
-            Ok(state.mk_var_decl(&js_var_name, None, false)) // Always use let for uninitialized
+            Ok(state.mk_var_decl(&unique_js_var_name, None, false)) // Always use let for uninitialized
         } else {
             panic!("Unsupported variable pattern {:?}", &local.pat)
         }
