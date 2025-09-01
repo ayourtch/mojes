@@ -743,13 +743,42 @@ fn convert_if_let_some_to_stmt(
     state.enter_scope();
     
     if let Some(inner_pat) = tuple_struct.elems.first() {
-        if let Pat::Ident(pat_ident) = inner_pat {
-            let var_name = pat_ident.ident.to_string();
-            let js_var_name = escape_js_identifier(&var_name);
-            let unique_js_var_name = state.declare_variable(var_name, js_var_name, false);
+        match inner_pat {
+            Pat::Ident(pat_ident) => {
+                let var_name = pat_ident.ident.to_string();
+                let js_var_name = escape_js_identifier(&var_name);
+                let unique_js_var_name = state.declare_variable(var_name, js_var_name, false);
 
-            // Add: const x = temp_var; (use cached result)
-            consequent_stmts.push(state.mk_var_decl(&unique_js_var_name, Some(temp_var_ref3), true));
+                // Add: const x = temp_var; (use cached result)
+                consequent_stmts.push(state.mk_var_decl(&unique_js_var_name, Some(temp_var_ref3), true));
+            }
+            Pat::Tuple(pat_tuple) => {
+                // Handle tuple destructuring: Some((a, b)) pattern
+                // Create individual assignments: const a = temp_var[0]; const b = temp_var[1];
+                
+                for (index, elem_pat) in pat_tuple.elems.iter().enumerate() {
+                    if let Pat::Ident(pat_ident) = elem_pat {
+                        let var_name = pat_ident.ident.to_string();
+                        let js_var_name = escape_js_identifier(&var_name);
+                        let unique_js_var_name = state.declare_variable(var_name.clone(), js_var_name, false);
+                        
+                        // Create: const var = temp_var[index];
+                        let array_access = js::Expr::Member(js::MemberExpr {
+                            span: DUMMY_SP,
+                            obj: Box::new(temp_var_ref3.clone()),
+                            prop: js::MemberProp::Computed(js::ComputedPropName {
+                                span: DUMMY_SP,
+                                expr: Box::new(state.mk_num_lit(index as f64)),
+                            }),
+                        });
+                        
+                        consequent_stmts.push(state.mk_var_decl(&unique_js_var_name, Some(array_access), true));
+                    }
+                }
+            }
+            _ => {
+                panic!("Unsupported pattern in if let Some(): {:?}. Only Pat::Ident and Pat::Tuple patterns are currently supported.", inner_pat);
+            }
         }
     }
 
