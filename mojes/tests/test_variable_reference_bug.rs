@@ -163,8 +163,7 @@ impl VideoManager {
         }
         
         if let Some((video_element, audio_element)) = get_video_and_audio(&format!("second_{}", participant_id)) {
-            // Both video_element and audio_element should be renamed with _1 suffix
-            println!("Second tuple: video={}, audio={}", video_element, audio_element); // Should use renamed variables
+            println!("Second tuple: video={}, audio={}", video_element, audio_element);
         }
     }
     
@@ -177,17 +176,24 @@ impl VideoManager {
         }
         
         if create_participant_video_element(participant_id).is_some() {
-            let video_element = create_participant_video_element(participant_id); // Should be video_element_1
-            println!("Created video: {}", debug_repr(&video_element)); // Should use video_element_1!
+            let video_element = create_participant_video_element(participant_id);
+            println!("Created video: {}", debug_repr(&video_element));
         }
         
         // Now with if let pattern
         if let Some(video_element) = create_participant_video_element(participant_id) {
-            println!("if let video: {}", debug_repr(&Some(video_element)));
+            println!("if let video: {} / {}", debug_repr(&Some(video_element)), debug_repr(&Some(participant_id.to_string())));
         }
         
+        if let Some(video_element) = create_participant_video_element(participant_id) { 
+            println!("if let video 2: {}", debug_repr(&Some(video_element)));
+        }
+
+        let video_element = format!("test");
+        let participant_id = "xxx";
+
         if let Some(video_element) = create_participant_video_element(participant_id) { // Should be video_element_1
-            println!("if let video 2: {}", debug_repr(&Some(video_element))); // Should use video_element_1!
+            println!("if let video 3: {}", debug_repr(&Some(video_element))); // Should use video_element_1!
         }
     }
 }

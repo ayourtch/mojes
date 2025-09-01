@@ -713,7 +713,6 @@ fn convert_if_let_some_to_stmt(
     state: &mut TranspilerState,
 ) -> Result<js::Stmt, String> {
     let matched_expr = rust_expr_to_js_with_state(init_expr, state)?;
-    let then_stmts = rust_block_to_js_with_state(block_action, &if_expr.then_branch, state)?;
 
     // Generate a unique temporary variable name to cache the function call result
     let temp_var_name = format!("temp_{}", state.symbol_table.len());
@@ -739,8 +738,10 @@ fn convert_if_let_some_to_stmt(
     );
     let condition = state.mk_binary_expr(not_null, js::BinaryOp::LogicalAnd, not_undefined);
 
-    // Handle variable binding if present
+    // Handle variable binding if present and create a new scope for the consequent
     let mut consequent_stmts = Vec::new();
+    state.enter_scope();
+    
     if let Some(inner_pat) = tuple_struct.elems.first() {
         if let Pat::Ident(pat_ident) = inner_pat {
             let var_name = pat_ident.ident.to_string();
@@ -752,8 +753,13 @@ fn convert_if_let_some_to_stmt(
         }
     }
 
+    // Process the then branch statements AFTER the variable is declared in scope
+    let then_stmts = rust_block_to_js_with_state(block_action, &if_expr.then_branch, state)?;
+
     // Add the then branch statements
     consequent_stmts.extend(then_stmts);
+    
+    state.exit_scope();
 
     // Handle else branch
     let alternate = if let Some((_, else_branch)) = &if_expr.else_branch {
