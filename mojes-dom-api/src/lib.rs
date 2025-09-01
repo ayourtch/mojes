@@ -2024,29 +2024,29 @@ impl RTCIceServer {
 #[js_type]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RTCConfiguration {
-    pub ice_servers: Vec<RTCIceServer>,
-    pub ice_transport_policy: Option<String>, // "all", "relay"
-    pub bundle_policy: Option<String>, // "balanced", "max-compat", "max-bundle"
-    pub rtcp_mux_policy: Option<String>, // "negotiate", "require"
+    pub iceServers: Vec<RTCIceServer>,
+    pub iceTransportPolicy: Option<String>, // "all", "relay"
+    pub bundlePolicy: Option<String>, // "balanced", "max-compat", "max-bundle"
+    pub rtcpMuxPolicy: Option<String>, // "negotiate", "require"
 }
 
 #[js_object]
 impl RTCConfiguration {
     pub fn new() -> Self {
         Self {
-            ice_servers: vec![],
-            ice_transport_policy: Some("all".to_string()),
-            bundle_policy: Some("balanced".to_string()),
-            rtcp_mux_policy: Some("require".to_string()),
+            iceServers: vec![],
+            iceTransportPolicy: Some("all".to_string()),
+            bundlePolicy: Some("balanced".to_string()),
+            rtcpMuxPolicy: Some("require".to_string()),
         }
     }
 
     pub fn with_ice_servers(ice_servers: Vec<RTCIceServer>) -> Self {
         Self {
-            ice_servers,
-            ice_transport_policy: Some("all".to_string()),
-            bundle_policy: Some("balanced".to_string()),
-            rtcp_mux_policy: Some("require".to_string()),
+            iceServers: ice_servers,
+            iceTransportPolicy: Some("all".to_string()),
+            bundlePolicy: Some("balanced".to_string()),
+            rtcpMuxPolicy: Some("require".to_string()),
         }
     }
 }
@@ -2567,7 +2567,7 @@ pub struct RTCPeerConnection {
 
 impl RTCPeerConnection {
     pub fn new(configuration: &RTCConfiguration) -> Self {
-        println!("RTCPeerConnection.new() with {} ICE servers", configuration.ice_servers.len());
+        println!("RTCPeerConnection.new() with {} ICE servers", configuration.iceServers.len());
         Self {
             connection_state: "new".to_string(),
             ice_connection_state: "new".to_string(),
