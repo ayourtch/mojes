@@ -704,7 +704,7 @@ fn handle_if_let_as_stmt(
     Ok(None)
 }
 
-/// Convert "if let Some(x) = expr" to optimized JavaScript statement
+/// Convert "if let Some(x) = expr" to optimized JavaScript statement with caching
 fn convert_if_let_some_to_stmt(
     block_action: BlockAction,
     tuple_struct: &syn::PatTupleStruct,
@@ -715,14 +715,25 @@ fn convert_if_let_some_to_stmt(
     let matched_expr = rust_expr_to_js_with_state(init_expr, state)?;
     let then_stmts = rust_block_to_js_with_state(block_action, &if_expr.then_branch, state)?;
 
-    // Create null/undefined check condition
+    // Generate a unique temporary variable name to cache the function call result
+    let temp_var_name = format!("temp_{}", state.symbol_table.len());
+    let temp_var_ident = state.mk_ident(&temp_var_name);
+
+    // Create: const temp_var = matched_expr;
+    let temp_var_decl = state.mk_var_decl(&temp_var_name, Some(matched_expr), true);
+
+    // Create null/undefined check condition using the temp variable
+    let temp_var_ref1 = js::Expr::Ident(temp_var_ident.clone());
+    let temp_var_ref2 = js::Expr::Ident(temp_var_ident.clone());
+    let temp_var_ref3 = js::Expr::Ident(temp_var_ident.clone());
+    
     let not_null = state.mk_binary_expr(
-        matched_expr.clone(),
+        temp_var_ref1,
         js::BinaryOp::NotEqEq,
         state.mk_null_lit(),
     );
     let not_undefined = state.mk_binary_expr(
-        matched_expr.clone(),
+        temp_var_ref2,
         js::BinaryOp::NotEqEq,
         state.mk_undefined(),
     );
@@ -736,8 +747,8 @@ fn convert_if_let_some_to_stmt(
             let js_var_name = escape_js_identifier(&var_name);
             let unique_js_var_name = state.declare_variable(var_name, js_var_name, false);
 
-            // Add: const x = matched_expr;
-            consequent_stmts.push(state.mk_var_decl(&unique_js_var_name, Some(matched_expr), true));
+            // Add: const x = temp_var; (use cached result)
+            consequent_stmts.push(state.mk_var_decl(&unique_js_var_name, Some(temp_var_ref3), true));
         }
     }
 
@@ -774,7 +785,8 @@ fn convert_if_let_some_to_stmt(
         None
     };
 
-    Ok(js::Stmt::If(js::IfStmt {
+    // Create the if statement
+    let if_stmt = js::Stmt::If(js::IfStmt {
         span: DUMMY_SP,
         test: Box::new(condition),
         cons: Box::new(js::Stmt::Block(js::BlockStmt {
@@ -783,6 +795,13 @@ fn convert_if_let_some_to_stmt(
             ctxt: SyntaxContext::empty(),
         })),
         alt: alternate,
+    });
+
+    // Wrap the temp variable declaration and if statement in a block to avoid polluting scope
+    Ok(js::Stmt::Block(js::BlockStmt {
+        span: DUMMY_SP,
+        stmts: vec![temp_var_decl, if_stmt],
+        ctxt: SyntaxContext::empty(),
     }))
 }
 
