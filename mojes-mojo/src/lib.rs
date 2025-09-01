@@ -2319,6 +2319,19 @@ fn handle_method_call(
             }
         }
 
+        "keys" => {
+            // HashMap.keys() -> Object.keys(HashMap)
+            // For JavaScript objects, we need to use Object.keys()
+            if js_args.is_empty() {
+                Ok(state.mk_call_expr(
+                    state.mk_member_expr(js::Expr::Ident(state.mk_ident("Object")), "keys"),
+                    vec![receiver]
+                ))
+            } else {
+                Err("keys() expects no arguments".to_string())
+            }
+        }
+
         "starts_with" => {
             Ok(state.mk_call_expr(state.mk_member_expr(receiver, "startsWith"), js_args))
         }

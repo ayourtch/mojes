@@ -134,16 +134,22 @@ fn test_tuple_field_access() {
 
 #[test]
 fn test_vector_methods_with_args() {
-    // Test remove method with execution since it now uses universal IIFE
+    // remove method -> now uses universal IIFE instead of direct splice
     let expr: Expr = parse_quote!(vec.remove(index));
     let js_code1 = rust_expr_to_js(&expr);
-    
+
     println!(
         "DEBUG test_vector_methods_with_args 1 js code: {}",
         &js_code1
     );
 
-    // Test that remove works correctly on arrays
+    // Test 1: Verify transpiler output format for remove()
+    assert!(js_code1.contains("((obj, key)=>obj.splice ? obj.splice(key, 1)[0]"), 
+            "Should generate universal IIFE for remove(): {}", js_code1);
+    // Old test (before universal IIFE):
+    // assert_eq!(js_code1, "vec.splice(index, 1)[0]");
+
+    // Test 2: Verify runtime correctness - that remove works correctly on arrays
     let test_code = format!(r#"
         let vec = [10, 20, 30];
         let index = 1;
@@ -153,7 +159,7 @@ fn test_vector_methods_with_args() {
     let result = eval_js(&test_code).unwrap();
     assert_eq!(result.as_number().unwrap(), 20.0);
 
-    // Test insert method with execution since it also uses universal IIFE  
+    // insert method -> also uses universal IIFE
     let expr: Expr = parse_quote!(vec.insert(0, item));
     let js_code = rust_expr_to_js(&expr);
 
@@ -162,7 +168,13 @@ fn test_vector_methods_with_args() {
         &js_code
     );
 
-    // Test that insert works correctly on arrays
+    // Test 3: Verify transpiler output format for insert()
+    assert!(js_code.contains("((obj, key, val)=>obj.splice ? obj.splice(key, 0, val) : obj[key] = val)"), 
+            "Should generate universal IIFE for insert(): {}", js_code);
+    // Old expectation (partially correct - insert already used IIFE):
+    // assert_eq!(js_code, "((obj, key, val)=>obj.splice ? obj.splice(key, 0, val) : obj[key] = val)(vec, 0, item)");
+
+    // Test 4: Verify runtime correctness - that insert works correctly on arrays
     let test_code2 = format!(r#"
         let vec = [20, 30];
         let item = 10;

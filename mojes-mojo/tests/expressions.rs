@@ -364,10 +364,22 @@ fn test_all_array_methods() {
     let result = eval_js(&test_code).unwrap();
     assert_eq!(result.as_number().unwrap(), 6.0);
 
-    // Test arr.remove() separately with execution since it now uses universal IIFE
+    // Test arr.remove() - now uses universal IIFE instead of direct splice
     let expr: Expr = parse_quote!(arr.remove(index));
     let js_code = rust_expr_to_js(&expr);
-    // The universal IIFE should work correctly for arrays
+    
+    // Test 1: Verify transpiler generates universal IIFE pattern
+    assert!(js_code.contains("((obj, key)=>obj.splice ? obj.splice(key, 1)[0]"), 
+            "Should generate universal IIFE for remove(): {}", js_code);
+    assert!(js_code.contains("delete obj[key]"), 
+            "Should handle non-array case in IIFE: {}", js_code);
+    assert!(js_code.contains(")(arr, index)"), 
+            "Should call IIFE with correct args: {}", js_code);
+    
+    // Old test (before universal IIFE): 
+    // assert_eq!(js_code, "arr.splice(index, 1)[0]");
+    
+    // Test 2: Verify runtime correctness - the universal IIFE should work correctly for arrays
     let test_code = format!(r#"
         const arr = [10, 20, 30, 40, 50];
         const index = 2;
@@ -378,7 +390,7 @@ fn test_all_array_methods() {
     // Check that it removed the correct element (30 at index 2)
     assert_eq!(result.as_number().unwrap(), 30.0);
     
-    // Test that the array was modified correctly
+    // Test 3: Verify side effects - that the array was modified correctly
     let test_code2 = format!(r#"
         const arr = [10, 20, 30, 40, 50];
         const index = 2;
