@@ -51,9 +51,10 @@ impl<T> Promise<T> {
     }
     
     // Basic Promise methods that would be available in JavaScript
-    pub fn then<F>(&self, callback: F) -> Promise<T>
+    // Supports both () and T return types from callbacks
+    pub fn then<F, U>(&self, callback: F) -> Promise<U>
     where
-        F: FnOnce(T),
+        F: FnOnce(T) -> U,
     {
         // In JavaScript, this would be: promise.then(callback)
         Promise::new()
