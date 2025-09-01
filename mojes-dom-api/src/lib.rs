@@ -2620,6 +2620,12 @@ impl RTCPeerConnection {
         Ok(())
     }
 
+    // Data channel methods
+    pub fn createDataChannel(&self, label: &str) -> RTCDataChannel {
+        println!("RTCPeerConnection.createDataChannel({})", label);
+        RTCDataChannel::new(label.to_string())
+    }
+
     // Event handlers (addEventListener with specific event types)
     pub fn addEventListener<F>(&self, event_type: &str, listener: F)
     where
