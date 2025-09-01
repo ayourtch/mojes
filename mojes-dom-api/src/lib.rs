@@ -2437,6 +2437,7 @@ impl RTCStatsReport {
 #[derive(Debug, Clone)]
 pub struct RTCPeerConnectionIceEvent {
     pub candidate: Option<RTCIceCandidate>,
+    pub url: Option<String>, // ICE server URL (deprecated but may still be present)
     // Inherits from Event
     pub r#type: String,
     pub target: Option<Element>,
@@ -2446,6 +2447,7 @@ impl RTCPeerConnectionIceEvent {
     pub fn new(candidate: Option<RTCIceCandidate>) -> Self {
         Self {
             candidate,
+            url: None, // Usually None unless specified
             r#type: "icecandidate".to_string(),
             target: None,
         }
@@ -2478,32 +2480,36 @@ impl RTCTrackEvent {
 }
 
 // #[js_type] - Browser built-in, do not export
+// NOTE: This conflates two different JavaScript events for Rust convenience:
+// 1. "datachannel" event on RTCPeerConnection (has channel property)
+// 2. "message" event on RTCDataChannel (uses MessageEvent with data property)
+// In practice, we need one type for addEventListener() since Rust can't have different
+// event types for different event names on the same method.
 #[derive(Debug, Clone)]
 pub struct RTCDataChannelEvent {
-    pub channel: RTCDataChannel,
+    pub channel: RTCDataChannel, // For "datachannel" event on RTCPeerConnection
+    pub data: String,           // For "message" event on RTCDataChannel (MessageEvent.data)
     // Inherits from Event
     pub r#type: String,
     pub target: Option<Element>,
-    // For message events
-    pub data: String,
 }
 
 impl RTCDataChannelEvent {
     pub fn new(channel: RTCDataChannel) -> Self {
         Self {
             channel,
+            data: String::new(),
             r#type: "datachannel".to_string(),
             target: None,
-            data: String::new(),
         }
     }
     
     pub fn new_with_data(channel: RTCDataChannel, data: String) -> Self {
         Self {
             channel,
+            data,
             r#type: "message".to_string(),
             target: None,
-            data,
         }
     }
 }
@@ -2568,21 +2574,25 @@ pub struct RTCPeerConnection {
 // #[js_type] - Internal Rust workaround, do not export to avoid browser conflicts
 #[derive(Debug, Clone, Default)]
 pub struct RTCPeerConnectionEvent {
-      // For icecandidate events
+      // For icecandidate events (RTCPeerConnectionIceEvent)
       pub candidate: Option<RTCIceCandidate>,
-      pub url: Option<String>,
+      pub url: Option<String>, // ICE server URL (deprecated)
 
-      // For track events  
+      // For track events (RTCTrackEvent)
       pub receiver: Option<RTCRtpReceiver>,
       pub streams: Option<Vec<MediaStream>>,
       pub track: Option<MediaStreamTrack>,
       pub transceiver: Option<RTCRtpTransceiver>,
 
-      // For datachannel events
+      // For datachannel events (RTCDataChannelEvent) 
       pub channel: Option<RTCDataChannel>,
 
-      // For connection state events (these are usually just the event type)
+      // For message events on DataChannel (DataChannelMessageEvent)
+      pub data: Option<String>,
+
+      // Common Event properties
       pub r#type: Option<String>,
+      pub target: Option<Element>,
   }
 
 
