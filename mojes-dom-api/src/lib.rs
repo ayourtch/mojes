@@ -2062,8 +2062,8 @@ pub struct RTCSessionDescription {
 }
 
 impl RTCSessionDescription {
-    pub fn new(type_: String, sdp: String) -> Self {
-        Self { r#type: type_, sdp }
+    pub fn new(r#type: String, sdp: String) -> Self {
+        Self { r#type, sdp }
     }
 }
 
@@ -2115,7 +2115,7 @@ pub struct RTCIceCandidate {
     pub address: Option<String>,
     pub protocol: Option<String>, // "udp", "tcp"
     pub port: Option<u16>,
-    pub type_: Option<String>,    // "host", "srflx", "prflx", "relay"
+    pub r#type: Option<String>,    // "host", "srflx", "prflx", "relay"
 }
 
 #[js_object]
@@ -2131,7 +2131,7 @@ impl RTCIceCandidate {
             address: None,
             protocol: None,
             port: None,
-            type_: None,
+            r#type: None,
         }
     }
     
@@ -2398,15 +2398,15 @@ impl RTCRtpTransceiver {
 pub struct RTCStats {
     pub id: String,
     pub timestamp: f64,
-    pub type_: String, // "inbound-rtp", "outbound-rtp", "candidate-pair", etc.
+    pub r#type: String, // "inbound-rtp", "outbound-rtp", "candidate-pair", etc.
 }
 
 impl RTCStats {
-    pub fn new(id: String, type_: String) -> Self {
+    pub fn new(id: String, r#type: String) -> Self {
         Self {
             id,
             timestamp: 0.0,
-            type_,
+            r#type,
         }
     }
 }
@@ -2436,7 +2436,7 @@ impl RTCStatsReport {
 pub struct RTCPeerConnectionIceEvent {
     pub candidate: Option<RTCIceCandidate>,
     // Inherits from Event
-    pub type_: String,
+    pub r#type: String,
     pub target: Option<Element>,
 }
 
@@ -2444,7 +2444,7 @@ impl RTCPeerConnectionIceEvent {
     pub fn new(candidate: Option<RTCIceCandidate>) -> Self {
         Self {
             candidate,
-            type_: "icecandidate".to_string(),
+            r#type: "icecandidate".to_string(),
             target: None,
         }
     }
@@ -2457,7 +2457,7 @@ pub struct RTCTrackEvent {
     pub streams: Vec<MediaStream>,
     pub transceiver: Option<RTCRtpTransceiver>,
     // Inherits from Event
-    pub type_: String,
+    pub r#type: String,
     pub target: Option<Element>,
 }
 
@@ -2468,7 +2468,7 @@ impl RTCTrackEvent {
             track,
             streams,
             transceiver: None,
-            type_: "track".to_string(),
+            r#type: "track".to_string(),
             target: None,
         }
     }
@@ -2478,7 +2478,7 @@ impl RTCTrackEvent {
 pub struct RTCDataChannelEvent {
     pub channel: RTCDataChannel,
     // Inherits from Event
-    pub type_: String,
+    pub r#type: String,
     pub target: Option<Element>,
     // For message events
     pub data: String,
@@ -2488,7 +2488,7 @@ impl RTCDataChannelEvent {
     pub fn new(channel: RTCDataChannel) -> Self {
         Self {
             channel,
-            type_: "datachannel".to_string(),
+            r#type: "datachannel".to_string(),
             target: None,
             data: String::new(),
         }
@@ -2497,7 +2497,7 @@ impl RTCDataChannelEvent {
     pub fn new_with_data(channel: RTCDataChannel, data: String) -> Self {
         Self {
             channel,
-            type_: "message".to_string(),
+            r#type: "message".to_string(),
             target: None,
             data,
         }
@@ -2508,12 +2508,12 @@ impl RTCDataChannelEvent {
 pub struct RTCDataChannel {
     pub label: String,
     pub ordered: bool,
-    pub max_retransmits: Option<u16>,
-    pub max_packet_life_time: Option<u16>,
+    pub maxRetransmits: Option<u16>,
+    pub maxPacketLifeTime: Option<u16>,
     pub protocol: String,
     pub negotiated: bool,
     pub id: Option<u16>,
-    pub ready_state: String, // "connecting", "open", "closing", "closed"
+    pub readyState: String, // "connecting", "open", "closing", "closed"
 }
 
 impl RTCDataChannel {
@@ -2521,12 +2521,12 @@ impl RTCDataChannel {
         Self {
             label,
             ordered: true,
-            max_retransmits: None,
-            max_packet_life_time: None,
+            maxRetransmits: None,
+            maxPacketLifeTime: None,
             protocol: String::new(),
             negotiated: false,
             id: None,
-            ready_state: "connecting".to_string(),
+            readyState: "connecting".to_string(),
         }
     }
 
@@ -2537,7 +2537,7 @@ impl RTCDataChannel {
 
     pub fn close(&mut self) {
         println!("RTCDataChannel.close()");
-        self.ready_state = "closed".to_string();
+        self.readyState = "closed".to_string();
     }
 
     pub fn addEventListener<F>(&mut self, event_type: &str, listener: F)
@@ -2553,9 +2553,9 @@ impl RTCDataChannel {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RTCPeerConnection {
     // Core state properties
-    pub connection_state: String, // "new", "connecting", "connected", "disconnected", "failed", "closed"
-    pub ice_connection_state: String,
-    pub signaling_state: String,
+    pub connectionState: String, // "new", "connecting", "connected", "disconnected", "failed", "closed"
+    pub iceConnectionState: String,
+    pub signalingState: String,
 }
 
 // WebRTC event struct - superset of all possible WebRTC event properties
@@ -2576,7 +2576,7 @@ pub struct RTCPeerConnection {
       pub channel: Option<RTCDataChannel>,
 
       // For connection state events (these are usually just the event type)
-      pub event_type: Option<String>,
+      pub r#type: Option<String>,
   }
 
 
@@ -2584,9 +2584,9 @@ impl RTCPeerConnection {
     pub fn new(configuration: &RTCConfiguration) -> Self {
         println!("RTCPeerConnection.new() with {} ICE servers", configuration.iceServers.len());
         Self {
-            connection_state: "new".to_string(),
-            ice_connection_state: "new".to_string(),
-            signaling_state: "stable".to_string(),
+            connectionState: "new".to_string(),
+            iceConnectionState: "new".to_string(),
+            signalingState: "stable".to_string(),
         }
     }
 
@@ -2650,8 +2650,8 @@ impl RTCPeerConnection {
     // Connection management
     pub fn close(&mut self) {
         println!("RTCPeerConnection.close()");
-        self.connection_state = "closed".to_string();
-        self.ice_connection_state = "closed".to_string();
-        self.signaling_state = "closed".to_string();
+        self.connectionState = "closed".to_string();
+        self.iceConnectionState = "closed".to_string();
+        self.signalingState = "closed".to_string();
     }
 }
