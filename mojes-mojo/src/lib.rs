@@ -1950,6 +1950,13 @@ fn handle_method_call(
             // .clone() is typically a no-op in JavaScript for primitives
             Ok(receiver)
         }
+        "as_str" => {
+            // Convert .as_str() to JavaScript string conversion: String(receiver)
+            Ok(state.mk_call_expr(
+                js::Expr::Ident(state.mk_ident("String")),
+                vec![receiver]
+            ))
+        }
         "push" => Ok(state.mk_call_expr(state.mk_member_expr(receiver, "push"), js_args)),
         "pop" => Ok(state.mk_call_expr(state.mk_member_expr(receiver, "pop"), js_args)),
         "contains" => Ok(state.mk_call_expr(state.mk_member_expr(receiver, "includes"), js_args)),
