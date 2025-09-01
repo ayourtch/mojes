@@ -55,6 +55,31 @@ mod tests {
     // Helper to evaluate JavaScript with context and get result
     fn eval_js_with_context(code: &str) -> JsResult<(JsValue, Context)> {
         let mut context = Context::default();
+        
+        // Add console.log support
+        let console_log = |_this: &JsValue, args: &[JsValue], ctx: &mut Context| -> JsResult<JsValue> {
+            let message = args.iter()
+                .map(|arg| arg.to_string(ctx).unwrap().to_std_string().unwrap())
+                .collect::<Vec<_>>()
+                .join(" ");
+            println!("JS Console: {}", message);
+            Ok(JsValue::undefined())
+        };
+        
+        let console_obj = boa_engine::object::ObjectInitializer::new(&mut context)
+            .function(
+                boa_engine::native_function::NativeFunction::from_fn_ptr(console_log),
+                "log",
+                0
+            )
+            .build();
+        
+        context.register_global_property(
+            "console", 
+            console_obj, 
+            boa_engine::property::Attribute::all()
+        ).unwrap();
+        
         let result = context.eval(Source::from_bytes(code))?;
         Ok((result, context))
     }
@@ -100,19 +125,48 @@ mod tests {
         
         // Test 1: Check if the generated JavaScript is syntactically valid
         println!("\n=== Testing JavaScript Syntax ===");
-        let full_js = format!("{}\n{}\n{}", class_code, method_code, function_code);
+        let full_js = format!("{}\n{}\n{}\n\n// Call the test function\ntest_rtype_field_functionality();", class_code, method_code, function_code);
         
         match eval_js_with_context(&full_js) {
             Ok((result, mut ctx)) => {
                 println!("✅ JavaScript syntax is valid");
                 let js_result = js_to_boolean(&result, &mut ctx);
                 println!("JavaScript test result: {}", js_result);
+                println!("Raw JavaScript result: {:?}", result);
                 
                 if js_result {
                     println!("🎉 r#type field works correctly in JavaScript!");
                 } else {
                     println!("❌ r#type field test failed in JavaScript execution");
-                    panic!("r#type field functionality failed in JavaScript");
+                    println!("Debug: Let's investigate what went wrong...");
+                    
+                    // Let's run a debug version to see the actual values
+                    let debug_test = format!(
+                        r#"
+                        {}
+                        {}
+                        
+                        const event = TestEvent.new("click", "button clicked");
+                        console.log("event:", event);
+                        console.log("event.type:", event.type);
+                        const direct_type = event.type;
+                        console.log("direct_type:", direct_type);
+                        direct_type;
+                        "#,
+                        class_code, method_code
+                    );
+                    
+                    match eval_js_with_context(&debug_test) {
+                        Ok((result, mut ctx)) => {
+                            let debug_value = js_to_string(&result, &mut ctx);
+                            println!("Debug result: '{}'", debug_value);
+                        }
+                        Err(e) => {
+                            println!("Debug error: {:?}", e);
+                        }
+                    }
+                    
+                    panic!("r#type field test failed in JavaScript execution");
                 }
             }
             Err(e) => {
@@ -144,7 +198,7 @@ mod tests {
                     println!("🎉 r#type field transpiles correctly to 'type'!");
                 } else {
                     println!("❌ r#type field access returned wrong value: expected 'test', got '{}'", field_value);
-                    panic!("r#type field access returned wrong value");
+                    panic!("r#type field access returned wrong value: expected 'test', got '{}'", field_value);
                 }
             }
             Err(e) => {

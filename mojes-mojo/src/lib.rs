@@ -4982,12 +4982,18 @@ fn handle_struct_expr(
                 for field in &struct_expr.fields {
                     if let syn::Member::Named(field_name) = &field.member {
                         let field_name_str = field_name.to_string();
+                        // Handle raw identifiers by removing the r# prefix
+                        let clean_field_name = if field_name_str.starts_with("r#") {
+                            &field_name_str[2..] // Remove "r#" prefix
+                        } else {
+                            &field_name_str
+                        };
                         let field_value = rust_expr_to_js_with_state(&field.expr, state)?;
                         
                         // Create obj.field assignment
                         let obj_access = state.mk_member_expr(
                             js::Expr::Ident(state.mk_ident("obj")),
-                            &field_name_str
+                            clean_field_name
                         );
                         let assignment = js::Expr::Assign(js::AssignExpr {
                             span: DUMMY_SP,
