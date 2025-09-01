@@ -12,3 +12,6 @@ mojes-mojo = { path = "../mojes-mojo" }
 mojes-dom-api = { path = "../mojes-dom-api" }
 linkme = "0.3"
 serde_json = "1.0"
+
+[dev-dependencies]
+boa_engine = "0.17"
