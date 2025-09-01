@@ -2069,8 +2069,8 @@ impl RTCSessionDescription {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RTCIceCandidateInit {
     pub candidate: String,
-    pub sdp_mid: Option<String>,
-    pub sdp_mline_index: Option<u16>,
+    pub sdpMid: Option<String>,
+    pub sdpMLineIndex: Option<u16>,
 }
 
 #[js_object]
@@ -2078,24 +2078,24 @@ impl RTCIceCandidateInit {
     pub fn new(candidate: String) -> Self {
         Self {
             candidate,
-            sdp_mid: Some("0".to_string()), // Default to first media line
-            sdp_mline_index: Some(0), // Default to first media line index
+            sdpMid: Some("0".to_string()), // Default to first media line
+            sdpMLineIndex: Some(0), // Default to first media line index
         }
     }
     
     pub fn with_sdp_mid(candidate: String, sdp_mid: String) -> Self {
         Self {
             candidate,
-            sdp_mid: Some(sdp_mid),
-            sdp_mline_index: None,
+            sdpMid: Some(sdp_mid),
+            sdpMLineIndex: None,
         }
     }
     
     pub fn with_mline_index(candidate: String, sdp_mline_index: u16) -> Self {
         Self {
             candidate,
-            sdp_mid: None,
-            sdp_mline_index: Some(sdp_mline_index),
+            sdpMid: None,
+            sdpMLineIndex: Some(sdp_mline_index),
         }
     }
 }
@@ -2104,8 +2104,8 @@ impl RTCIceCandidateInit {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RTCIceCandidate {
     pub candidate: String,        // ICE candidate string
-    pub sdp_mid: Option<String>,  // Media stream identification
-    pub sdp_mline_index: Option<u16>, // Media line index
+    pub sdpMid: Option<String>,   // Media stream identification
+    pub sdpMLineIndex: Option<u16>, // Media line index
     pub foundation: Option<String>,
     pub component: Option<u16>,
     pub priority: Option<u32>,
@@ -2120,8 +2120,8 @@ impl RTCIceCandidate {
     pub fn new(init: RTCIceCandidateInit) -> Self {
         Self {
             candidate: init.candidate,
-            sdp_mid: init.sdp_mid,
-            sdp_mline_index: init.sdp_mline_index,
+            sdpMid: init.sdpMid,
+            sdpMLineIndex: init.sdpMLineIndex,
             foundation: None,
             component: None,
             priority: None,
@@ -2136,8 +2136,8 @@ impl RTCIceCandidate {
     pub fn to_init(&self) -> RTCIceCandidateInit {
         RTCIceCandidateInit {
             candidate: self.candidate.clone(),
-            sdp_mid: self.sdp_mid.clone(),
-            sdp_mline_index: self.sdp_mline_index,
+            sdpMid: self.sdpMid.clone(),
+            sdpMLineIndex: self.sdpMLineIndex,
         }
     }
 }
