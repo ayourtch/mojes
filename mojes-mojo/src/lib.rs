@@ -2063,20 +2063,112 @@ fn handle_method_call(
             Ok(receiver)
         }
         "is_some" => {
-            // Option::is_some() -> value !== null && value !== undefined
-            let null_check =
-                state.mk_binary_expr(receiver.clone(), js::BinaryOp::NotEqEq, state.mk_null_lit());
-            let undefined_check =
-                state.mk_binary_expr(receiver, js::BinaryOp::NotEqEq, state.mk_undefined());
-            Ok(state.mk_binary_expr(null_check, js::BinaryOp::LogicalAnd, undefined_check))
+            // Check if receiver is a function call to avoid duplication
+            if matches!(method_call.receiver.as_ref(), syn::Expr::Call(_)) {
+                // Create IIFE to cache function call result: (val => val !== null && val !== undefined)(function_call())
+                let param = js::Pat::Ident(js::BindingIdent {
+                    id: state.mk_ident("val"),
+                    type_ann: None,
+                });
+                
+                let null_check = state.mk_binary_expr(
+                    js::Expr::Ident(state.mk_ident("val")), 
+                    js::BinaryOp::NotEqEq, 
+                    state.mk_null_lit()
+                );
+                let undefined_check = state.mk_binary_expr(
+                    js::Expr::Ident(state.mk_ident("val")), 
+                    js::BinaryOp::NotEqEq, 
+                    state.mk_undefined()
+                );
+                let condition = state.mk_binary_expr(null_check, js::BinaryOp::LogicalAnd, undefined_check);
+                
+                let iife = js::ArrowExpr {
+                    span: DUMMY_SP,
+                    params: vec![param],
+                    body: Box::new(js::BlockStmtOrExpr::Expr(Box::new(condition))),
+                    is_async: false,
+                    is_generator: false,
+                    type_params: None,
+                    return_type: None,
+                    ctxt: SyntaxContext::empty(),
+                };
+                
+                Ok(js::Expr::Call(js::CallExpr {
+                    span: DUMMY_SP,
+                    callee: js::Callee::Expr(Box::new(js::Expr::Paren(js::ParenExpr {
+                        span: DUMMY_SP,
+                        expr: Box::new(js::Expr::Arrow(iife)),
+                    }))),
+                    args: vec![js::ExprOrSpread {
+                        spread: None,
+                        expr: Box::new(receiver),
+                    }],
+                    type_args: None,
+                    ctxt: SyntaxContext::empty(),
+                }))
+            } else {
+                // Option::is_some() -> value !== null && value !== undefined
+                let null_check =
+                    state.mk_binary_expr(receiver.clone(), js::BinaryOp::NotEqEq, state.mk_null_lit());
+                let undefined_check =
+                    state.mk_binary_expr(receiver, js::BinaryOp::NotEqEq, state.mk_undefined());
+                Ok(state.mk_binary_expr(null_check, js::BinaryOp::LogicalAnd, undefined_check))
+            }
         }
         "is_none" => {
-            // Option::is_none() -> value === null || value === undefined
-            let null_check =
-                state.mk_binary_expr(receiver.clone(), js::BinaryOp::EqEqEq, state.mk_null_lit());
-            let undefined_check =
-                state.mk_binary_expr(receiver, js::BinaryOp::EqEqEq, state.mk_undefined());
-            Ok(state.mk_binary_expr(null_check, js::BinaryOp::LogicalOr, undefined_check))
+            // Check if receiver is a function call to avoid duplication
+            if matches!(method_call.receiver.as_ref(), syn::Expr::Call(_)) {
+                // Create IIFE to cache function call result: (val => val === null || val === undefined)(function_call())
+                let param = js::Pat::Ident(js::BindingIdent {
+                    id: state.mk_ident("val"),
+                    type_ann: None,
+                });
+                
+                let null_check = state.mk_binary_expr(
+                    js::Expr::Ident(state.mk_ident("val")), 
+                    js::BinaryOp::EqEqEq, 
+                    state.mk_null_lit()
+                );
+                let undefined_check = state.mk_binary_expr(
+                    js::Expr::Ident(state.mk_ident("val")), 
+                    js::BinaryOp::EqEqEq, 
+                    state.mk_undefined()
+                );
+                let condition = state.mk_binary_expr(null_check, js::BinaryOp::LogicalOr, undefined_check);
+                
+                let iife = js::ArrowExpr {
+                    span: DUMMY_SP,
+                    params: vec![param],
+                    body: Box::new(js::BlockStmtOrExpr::Expr(Box::new(condition))),
+                    is_async: false,
+                    is_generator: false,
+                    type_params: None,
+                    return_type: None,
+                    ctxt: SyntaxContext::empty(),
+                };
+                
+                Ok(js::Expr::Call(js::CallExpr {
+                    span: DUMMY_SP,
+                    callee: js::Callee::Expr(Box::new(js::Expr::Paren(js::ParenExpr {
+                        span: DUMMY_SP,
+                        expr: Box::new(js::Expr::Arrow(iife)),
+                    }))),
+                    args: vec![js::ExprOrSpread {
+                        spread: None,
+                        expr: Box::new(receiver),
+                    }],
+                    type_args: None,
+                    ctxt: SyntaxContext::empty(),
+                }))
+            } else {
+                // Option::is_none() -> value === null || value === undefined
+                let null_check =
+                    state.mk_binary_expr(receiver.clone(), js::BinaryOp::EqEqEq, state.mk_null_lit());
+                let undefined_check =
+                    state.mk_binary_expr(receiver, js::BinaryOp::EqEqEq, state.mk_undefined());
+                Ok(state.mk_binary_expr(null_check, js::BinaryOp::LogicalOr, undefined_check))
+            }
         }
         "unwrap" => {
             // .unwrap() is just the value itself in JavaScript
