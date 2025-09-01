@@ -2649,6 +2649,11 @@ impl RTCPeerConnection {
         Ok(())
     }
 
+    pub fn getSenders(&self) -> Vec<RTCRtpSender> {
+        println!("RTCPeerConnection.getSenders()");
+        Vec::new()
+    }
+
     // Data channel methods
     pub fn createDataChannel(&self, label: &str) -> RTCDataChannel {
         println!("RTCPeerConnection.createDataChannel({})", label);
