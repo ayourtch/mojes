@@ -2028,6 +2028,7 @@ pub struct RTCConfiguration {
     pub iceTransportPolicy: Option<String>, // "all", "relay"
     pub bundlePolicy: Option<String>, // "balanced", "max-compat", "max-bundle"
     pub rtcpMuxPolicy: Option<String>, // "negotiate", "require"
+    pub iceCandidatePoolSize: Option<u32>, 
 }
 
 #[js_object]
@@ -2038,6 +2039,7 @@ impl RTCConfiguration {
             iceTransportPolicy: Some("all".to_string()),
             bundlePolicy: Some("balanced".to_string()),
             rtcpMuxPolicy: Some("require".to_string()),
+            iceCandidatePoolSize: Some(50),
         }
     }
 
@@ -2047,6 +2049,7 @@ impl RTCConfiguration {
             iceTransportPolicy: Some("all".to_string()),
             bundlePolicy: Some("balanced".to_string()),
             rtcpMuxPolicy: Some("require".to_string()),
+            iceCandidatePoolSize: Some(50),
         }
     }
 }
