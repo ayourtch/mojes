@@ -2207,8 +2207,8 @@ pub struct MediaStreamTrack {
     pub label: String,
     pub enabled: bool,
     pub muted: bool,
-    pub readonly: bool,
-    pub ready_state: String, // "live", "ended"
+    pub readOnly: bool,
+    pub readyState: String, // "live", "ended"
 }
 
 impl MediaStreamTrack {
@@ -2219,14 +2219,14 @@ impl MediaStreamTrack {
             label: format!("Mock {} Track", kind),
             enabled: true,
             muted: false,
-            readonly: false,
-            ready_state: "live".to_string(),
+            readOnly: false,
+            readyState: "live".to_string(),
         }
     }
 
     pub fn stop(&mut self) {
         println!("MediaStreamTrack.stop()");
-        self.ready_state = "ended".to_string();
+        self.readyState = "ended".to_string();
     }
 
     pub fn clone(&self) -> Self {
@@ -2236,8 +2236,8 @@ impl MediaStreamTrack {
             label: self.label.clone(),
             enabled: self.enabled,
             muted: self.muted,
-            readonly: self.readonly,
-            ready_state: self.ready_state.clone(),
+            readOnly: self.readOnly,
+            readyState: self.readyState.clone(),
         }
     }
 
