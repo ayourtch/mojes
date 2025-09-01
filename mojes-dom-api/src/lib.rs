@@ -2480,6 +2480,8 @@ pub struct RTCDataChannelEvent {
     // Inherits from Event
     pub type_: String,
     pub target: Option<Element>,
+    // For message events
+    pub data: String,
 }
 
 impl RTCDataChannelEvent {
@@ -2488,6 +2490,16 @@ impl RTCDataChannelEvent {
             channel,
             type_: "datachannel".to_string(),
             target: None,
+            data: String::new(),
+        }
+    }
+    
+    pub fn new_with_data(channel: RTCDataChannel, data: String) -> Self {
+        Self {
+            channel,
+            type_: "message".to_string(),
+            target: None,
+            data,
         }
     }
 }
@@ -2530,7 +2542,7 @@ impl RTCDataChannel {
 
     pub fn addEventListener<F>(&mut self, event_type: &str, listener: F)
     where
-        F: Fn(Event) + 'static,
+        F: Fn(RTCDataChannelEvent) + 'static,
     {
         println!("RTCDataChannel.addEventListener({})", event_type);
         // Events: "open", "message", "error", "close"
