@@ -2226,6 +2226,98 @@ fn handle_method_call(
                 Err("insert() expects exactly two arguments".to_string())
             }
         }
+        "get" => {
+            // Universal get: use .get() for Map objects, bracket notation for objects/HashMaps
+            // ((obj, key) => obj.get && typeof obj.get === 'function' ? obj.get(key) : obj[key])(receiver, key)
+            if js_args.len() == 1 {
+                // Create parameters for the IIFE
+                let obj_param = js::Pat::Ident(js::BindingIdent {
+                    id: state.mk_ident("obj"),
+                    type_ann: None,
+                });
+                let key_param = js::Pat::Ident(js::BindingIdent {
+                    id: state.mk_ident("key"),
+                    type_ann: None,
+                });
+                
+                // Check if obj.get exists and is a function (Map objects)
+                let get_exists = state.mk_member_expr(js::Expr::Ident(state.mk_ident("obj")), "get");
+                let typeof_get = js::Expr::Unary(js::UnaryExpr {
+                    span: DUMMY_SP,
+                    op: js::UnaryOp::TypeOf,
+                    arg: Box::new(state.mk_member_expr(js::Expr::Ident(state.mk_ident("obj")), "get")),
+                });
+                let is_function = state.mk_binary_expr(
+                    typeof_get,
+                    js::BinaryOp::EqEqEq,
+                    state.mk_str_lit("function")
+                );
+                let get_check = state.mk_binary_expr(
+                    get_exists,
+                    js::BinaryOp::LogicalAnd,
+                    is_function
+                );
+                
+                // Map case: obj.get(key) 
+                let map_get = state.mk_call_expr(
+                    state.mk_member_expr(js::Expr::Ident(state.mk_ident("obj")), "get"),
+                    vec![js::Expr::Ident(state.mk_ident("key"))],
+                );
+                
+                // Object case: obj[key]
+                let obj_get = js::Expr::Member(js::MemberExpr {
+                    span: DUMMY_SP,
+                    obj: Box::new(js::Expr::Ident(state.mk_ident("obj"))),
+                    prop: js::MemberProp::Computed(js::ComputedPropName {
+                        span: DUMMY_SP,
+                        expr: Box::new(js::Expr::Ident(state.mk_ident("key"))),
+                    }),
+                });
+                
+                // Conditional: obj.get && typeof obj.get === 'function' ? obj.get(key) : obj[key]
+                let conditional = js::Expr::Cond(js::CondExpr {
+                    span: DUMMY_SP,
+                    test: Box::new(get_check),
+                    cons: Box::new(map_get),
+                    alt: Box::new(obj_get),
+                });
+                
+                // Create IIFE: (obj, key) => conditional
+                let iife = js::ArrowExpr {
+                    span: DUMMY_SP,
+                    params: vec![obj_param, key_param],
+                    body: Box::new(js::BlockStmtOrExpr::Expr(Box::new(conditional))),
+                    is_async: false,
+                    is_generator: false,
+                    ctxt: SyntaxContext::empty(),
+                    return_type: None,
+                    type_params: None,
+                };
+                
+                // Call the IIFE with receiver and key: ((obj, key) => ...)(receiver, key)
+                Ok(js::Expr::Call(js::CallExpr {
+                    span: DUMMY_SP,
+                    callee: js::Callee::Expr(Box::new(js::Expr::Paren(js::ParenExpr {
+                        span: DUMMY_SP,
+                        expr: Box::new(js::Expr::Arrow(iife)),
+                    }))),
+                    args: vec![
+                        js::ExprOrSpread {
+                            spread: None,
+                            expr: Box::new(receiver),
+                        },
+                        js::ExprOrSpread {
+                            spread: None,
+                            expr: Box::new(js_args[0].clone()),
+                        },
+                    ],
+                    type_args: None,
+                    ctxt: SyntaxContext::empty(),
+                }))
+            } else {
+                Err("get() expects exactly one argument".to_string())
+            }
+        }
 
         "starts_with" => {
             Ok(state.mk_call_expr(state.mk_member_expr(receiver, "startsWith"), js_args))
