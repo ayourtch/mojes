@@ -134,24 +134,43 @@ fn test_tuple_field_access() {
 
 #[test]
 fn test_vector_methods_with_args() {
-    // remove method -> splice
+    // Test remove method with execution since it now uses universal IIFE
     let expr: Expr = parse_quote!(vec.remove(index));
     let js_code1 = rust_expr_to_js(&expr);
-
-    // insert method -> splice
-    let expr: Expr = parse_quote!(vec.insert(0, item));
-    let js_code = rust_expr_to_js(&expr);
-
+    
     println!(
         "DEBUG test_vector_methods_with_args 1 js code: {}",
         &js_code1
     );
+
+    // Test that remove works correctly on arrays
+    let test_code = format!(r#"
+        let vec = [10, 20, 30];
+        let index = 1;
+        let removed = {};
+        removed;
+    "#, js_code1);
+    let result = eval_js(&test_code).unwrap();
+    assert_eq!(result.as_number().unwrap(), 20.0);
+
+    // Test insert method with execution since it also uses universal IIFE  
+    let expr: Expr = parse_quote!(vec.insert(0, item));
+    let js_code = rust_expr_to_js(&expr);
+
     println!(
         "DEBUG test_vector_methods_with_args 2 js code: {}",
         &js_code
     );
-    assert_eq!(js_code1, "vec.splice(index, 1)[0]");
-    assert_eq!(js_code, "((obj, key, val)=>obj.splice ? obj.splice(key, 0, val) : obj[key] = val)(vec, 0, item)");
+
+    // Test that insert works correctly on arrays
+    let test_code2 = format!(r#"
+        let vec = [20, 30];
+        let item = 10;
+        {};
+        vec[0];
+    "#, js_code);
+    let result2 = eval_js(&test_code2).unwrap();
+    assert_eq!(result2.as_number().unwrap(), 10.0);
 }
 
 // ==================== 7. VARIABLE DECLARATIONS WITHOUT INIT ====================

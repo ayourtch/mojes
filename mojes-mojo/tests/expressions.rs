@@ -340,14 +340,14 @@ fn test_all_array_methods() {
         // Methods (keep parentheses)
         (parse_quote!(arr.push(item)), "arr.push(item)"),
         (parse_quote!(arr.pop()), "arr.pop()"),
-        (parse_quote!(arr.remove(index)), "arr.splice(index, 1)[0]"),
+        // Note: arr.remove() now uses universal IIFE, tested separately below
         (parse_quote!(arr.map(func)), "arr.map(func)"),
         (parse_quote!(arr.filter(pred)), "arr.filter(pred)"),
         (parse_quote!(arr.find(pred)), "arr.find(pred)"),
         (parse_quote!(arr.contains(item)), "arr.includes(item)"),
     ];
 
-    // Test methods with string matching (except len())
+    // Test methods with string matching (except len() and remove())
     for (expr, expected) in test_cases {
         let js_code = rust_expr_to_js(&expr);
         assert_eq!(js_code, expected, "Failed for expression: {:?}", expr);
@@ -363,6 +363,31 @@ fn test_all_array_methods() {
     "#, js_code);
     let result = eval_js(&test_code).unwrap();
     assert_eq!(result.as_number().unwrap(), 6.0);
+
+    // Test arr.remove() separately with execution since it now uses universal IIFE
+    let expr: Expr = parse_quote!(arr.remove(index));
+    let js_code = rust_expr_to_js(&expr);
+    // The universal IIFE should work correctly for arrays
+    let test_code = format!(r#"
+        const arr = [10, 20, 30, 40, 50];
+        const index = 2;
+        const removed = {};
+        removed;
+    "#, js_code);
+    let result = eval_js(&test_code).unwrap();
+    // Check that it removed the correct element (30 at index 2)
+    assert_eq!(result.as_number().unwrap(), 30.0);
+    
+    // Test that the array was modified correctly
+    let test_code2 = format!(r#"
+        const arr = [10, 20, 30, 40, 50];
+        const index = 2;
+        {};
+        arr.length;
+    "#, js_code);
+    let result2 = eval_js(&test_code2).unwrap();
+    // Check that array now has 4 elements
+    assert_eq!(result2.as_number().unwrap(), 4.0);
 
     // FIXME: Test arr.insert() separately with execution since it now uses IIFE
     // Currently broken due to BOA engine API changes - need to update .get() calls
