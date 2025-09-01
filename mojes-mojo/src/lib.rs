@@ -4577,22 +4577,52 @@ fn handle_closure_expr(
     let params: Vec<js::Pat> = closure
         .inputs
         .iter()
-        .filter_map(|param| {
+        .map(|param| {
             match param {
-                Pat::Ident(pat_ident) => Some(js::Pat::Ident(js::BindingIdent {
+                Pat::Ident(pat_ident) => js::Pat::Ident(js::BindingIdent {
                     id: state.mk_ident(&pat_ident.ident.to_string()),
                     type_ann: None,
-                })),
+                }),
                 Pat::Reference(ref_pat) => {
                     // Handle reference patterns like &x, &&x
-                    extract_ident_from_pattern(&ref_pat.pat).map(|ident| {
-                        js::Pat::Ident(js::BindingIdent {
-                            id: state.mk_ident(&ident),
-                            type_ann: None,
-                        })
+                    let ident = extract_ident_from_pattern(&ref_pat.pat)
+                        .unwrap_or_else(|| panic!("Failed to extract identifier from reference pattern: {:?}", ref_pat));
+                    js::Pat::Ident(js::BindingIdent {
+                        id: state.mk_ident(&ident),
+                        type_ann: None,
                     })
                 }
-                _ => None,
+                Pat::Type(type_pat) => {
+                    // Handle typed patterns like |e: TestEvent| or |_: String|
+                    match &*type_pat.pat {
+                        Pat::Wild(_) => {
+                            // Handle typed wildcard patterns |_: Type| -> generate placeholder name
+                            let placeholder_name = format!("_unused_{}", closure.inputs.iter().position(|p| std::ptr::eq(p, param)).unwrap_or(0));
+                            js::Pat::Ident(js::BindingIdent {
+                                id: state.mk_ident(&placeholder_name),
+                                type_ann: None,
+                            })
+                        }
+                        _ => {
+                            // Handle normal typed patterns |e: TestEvent| -> extract 'e' from the type annotation
+                            let ident = extract_ident_from_pattern(&type_pat.pat)
+                                .unwrap_or_else(|| panic!("Failed to extract identifier from typed pattern: {:?}", type_pat));
+                            js::Pat::Ident(js::BindingIdent {
+                                id: state.mk_ident(&ident),
+                                type_ann: None,
+                            })
+                        }
+                    }
+                }
+                Pat::Wild(_) => {
+                    // Handle wildcard patterns |_| -> generate a placeholder parameter name
+                    let placeholder_name = format!("_unused_{}", closure.inputs.iter().position(|p| std::ptr::eq(p, param)).unwrap_or(0));
+                    js::Pat::Ident(js::BindingIdent {
+                        id: state.mk_ident(&placeholder_name),
+                        type_ann: None,
+                    })
+                }
+                _ => panic!("Unsupported closure parameter pattern: {:?}", param),
             }
         })
         .collect();
