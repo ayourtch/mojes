@@ -120,16 +120,19 @@ impl TranspilerState {
         let unique_js_name = self.ensure_unique_js_name(&js_name);
         
         if let Some(current_scope) = self.scope_stack.last_mut() {
+            // We're in a local scope - only add to scope, not global symbol table
             current_scope.insert(rust_name.clone(), unique_js_name.clone());
+        } else {
+            // We're at global scope - add to global symbol table
+            self.symbol_table.insert(
+                rust_name,
+                SymbolInfo {
+                    js_name: unique_js_name.clone(),
+                    rust_type: "unknown".to_string(),
+                    is_mutable,
+                },
+            );
         }
-        self.symbol_table.insert(
-            rust_name,
-            SymbolInfo {
-                js_name: unique_js_name.clone(),
-                rust_type: "unknown".to_string(),
-                is_mutable,
-            },
-        );
         
         // Return the unique name so caller can use it
         unique_js_name
@@ -1981,19 +1984,149 @@ fn handle_method_call(
             ))
         }
         "remove" => {
-            // vec.remove(index) -> vec.splice(index, 1)[0]
+            // Universal remove: use splice for arrays, delete for objects/HashMaps
+            // ((obj, key) => obj.splice ? obj.splice(key, 1)[0] : (delete obj[key] ? undefined : undefined))(receiver, key)
             if js_args.len() == 1 {
-                let splice_call = state.mk_call_expr(
-                    state.mk_member_expr(receiver, "splice"),
-                    vec![js_args[0].clone(), state.mk_num_lit(1.0)],
-                );
-                Ok(js::Expr::Member(js::MemberExpr {
+                // Create parameters for the IIFE
+                let obj_param = js::Pat::Ident(js::BindingIdent {
+                    id: state.mk_ident("obj"),
+                    type_ann: None,
+                });
+                let key_param = js::Pat::Ident(js::BindingIdent {
+                    id: state.mk_ident("key"),
+                    type_ann: None,
+                });
+                
+                // Check if obj.splice exists (array)
+                let splice_check = state.mk_member_expr(js::Expr::Ident(state.mk_ident("obj")), "splice");
+                
+                // Array case: obj.splice(key, 1)[0]
+                let array_remove = js::Expr::Member(js::MemberExpr {
                     span: DUMMY_SP,
-                    obj: Box::new(splice_call),
+                    obj: Box::new(state.mk_call_expr(
+                        splice_check.clone(),
+                        vec![
+                            js::Expr::Ident(state.mk_ident("key")),
+                            state.mk_num_lit(1.0),
+                        ],
+                    )),
                     prop: js::MemberProp::Computed(js::ComputedPropName {
                         span: DUMMY_SP,
                         expr: Box::new(state.mk_num_lit(0.0)),
                     }),
+                });
+                
+                // Object case: delete obj[key] (returns true/false, but we need the old value)
+                // For HashMap compatibility, we should: let oldVal = obj[key]; delete obj[key]; return oldVal;
+                // But for simplicity in IIFE: (function(){let v=obj[key]; delete obj[key]; return v;})()
+                let obj_remove = js::Expr::Call(js::CallExpr {
+                    span: DUMMY_SP,
+                    callee: js::Callee::Expr(Box::new(js::Expr::Paren(js::ParenExpr {
+                        span: DUMMY_SP,
+                        expr: Box::new(js::Expr::Arrow(js::ArrowExpr {
+                            span: DUMMY_SP,
+                            params: vec![],
+                            body: Box::new(js::BlockStmtOrExpr::BlockStmt(js::BlockStmt {
+                                span: DUMMY_SP,
+                                stmts: vec![
+                                    // let v = obj[key];
+                                    js::Stmt::Decl(js::Decl::Var(Box::new(js::VarDecl {
+                                        span: DUMMY_SP,
+                                        kind: js::VarDeclKind::Let,
+                                        declare: false,
+                                        decls: vec![js::VarDeclarator {
+                                            span: DUMMY_SP,
+                                            name: js::Pat::Ident(js::BindingIdent {
+                                                id: state.mk_ident("v"),
+                                                type_ann: None,
+                                            }),
+                                            init: Some(Box::new(js::Expr::Member(js::MemberExpr {
+                                                span: DUMMY_SP,
+                                                obj: Box::new(js::Expr::Ident(state.mk_ident("obj"))),
+                                                prop: js::MemberProp::Computed(js::ComputedPropName {
+                                                    span: DUMMY_SP,
+                                                    expr: Box::new(js::Expr::Ident(state.mk_ident("key"))),
+                                                }),
+                                            }))),
+                                            definite: false,
+                                        }],
+                                        ctxt: SyntaxContext::empty(),
+                                    }))),
+                                    // delete obj[key];
+                                    js::Stmt::Expr(js::ExprStmt {
+                                        span: DUMMY_SP,
+                                        expr: Box::new(js::Expr::Unary(js::UnaryExpr {
+                                            span: DUMMY_SP,
+                                            op: js::UnaryOp::Delete,
+                                            arg: Box::new(js::Expr::Member(js::MemberExpr {
+                                                span: DUMMY_SP,
+                                                obj: Box::new(js::Expr::Ident(state.mk_ident("obj"))),
+                                                prop: js::MemberProp::Computed(js::ComputedPropName {
+                                                    span: DUMMY_SP,
+                                                    expr: Box::new(js::Expr::Ident(state.mk_ident("key"))),
+                                                }),
+                                            })),
+                                        })),
+                                    }),
+                                    // return v;
+                                    js::Stmt::Return(js::ReturnStmt {
+                                        span: DUMMY_SP,
+                                        arg: Some(Box::new(js::Expr::Ident(state.mk_ident("v")))),
+                                    }),
+                                ],
+                                ctxt: SyntaxContext::empty(),
+                            })),
+                            is_async: false,
+                            is_generator: false,
+                            ctxt: SyntaxContext::empty(),
+                            return_type: None,
+                            type_params: None,
+                        })),
+                    }))),
+                    args: vec![],
+                    type_args: None,
+                    ctxt: SyntaxContext::empty(),
+                });
+                
+                // Conditional: obj.splice ? array_remove : obj_remove
+                let conditional = js::Expr::Cond(js::CondExpr {
+                    span: DUMMY_SP,
+                    test: Box::new(splice_check),
+                    cons: Box::new(array_remove),
+                    alt: Box::new(obj_remove),
+                });
+                
+                // Create IIFE: (obj, key) => conditional
+                let iife = js::ArrowExpr {
+                    span: DUMMY_SP,
+                    params: vec![obj_param, key_param],
+                    body: Box::new(js::BlockStmtOrExpr::Expr(Box::new(conditional))),
+                    is_async: false,
+                    is_generator: false,
+                    ctxt: SyntaxContext::empty(),
+                    return_type: None,
+                    type_params: None,
+                };
+                
+                // Call the IIFE with receiver and key: ((obj, key) => ...)(receiver, key)
+                Ok(js::Expr::Call(js::CallExpr {
+                    span: DUMMY_SP,
+                    callee: js::Callee::Expr(Box::new(js::Expr::Paren(js::ParenExpr {
+                        span: DUMMY_SP,
+                        expr: Box::new(js::Expr::Arrow(iife)),
+                    }))),
+                    args: vec![
+                        js::ExprOrSpread {
+                            spread: None,
+                            expr: Box::new(receiver),
+                        },
+                        js::ExprOrSpread {
+                            spread: None,
+                            expr: Box::new(js_args[0].clone()),
+                        },
+                    ],
+                    type_args: None,
+                    ctxt: SyntaxContext::empty(),
                 }))
             } else {
                 Err("remove() expects exactly one argument".to_string())
@@ -4502,11 +4635,11 @@ fn handle_pattern_binding(
                             let js_var_name = escape_js_identifier(&var_name);
                             let field_name_str = field_name.to_string();
                             
-                            state.declare_variable(var_name, js_var_name.clone(), false);
+                            let unique_js_var_name = state.declare_variable(var_name, js_var_name.clone(), false);
                             
-                            // Generate: const one = _match_value.one;
+                            // Generate: const one = _match_value.one; (using the unique name)
                             binding_stmts.push(state.mk_var_decl(
-                                &js_var_name,
+                                &unique_js_var_name,
                                 Some(state.mk_member_expr(
                                     js::Expr::Ident(state.mk_ident(match_var)),
                                     &field_name_str
@@ -4670,11 +4803,11 @@ fn handle_match_expr(
         // Use BlockAction::Return so that final expressions in match arms are properly returned
         let body_expr = rust_expr_to_js_with_action_and_state(BlockAction::Return, &arm.body, state)?;
 
-        // Exit the scope after processing this arm
-        state.exit_scope();
-
         // Combine binding statements with return statement
         binding_stmts.push(state.mk_return_stmt(Some(body_expr)));
+
+        // Exit the scope after processing this arm
+        state.exit_scope();
 
         let current_if = js::Stmt::If(js::IfStmt {
             span: DUMMY_SP,
