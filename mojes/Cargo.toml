@@ -14,4 +14,4 @@ linkme = "0.3"
 serde_json = "1.0"
 
 [dev-dependencies]
-boa_engine = "0.17"
+boa_engine = "0.17.3"
