@@ -2867,6 +2867,14 @@ fn handle_local_statement(
                     ctxt: SyntaxContext::empty(),
                 }))))
             }
+            Pat::Wild(_) => {
+                // Handle wildcard patterns: let _ = expr;
+                // In JavaScript, this becomes just evaluating the expression for side effects
+                Ok(js::Stmt::Expr(js::ExprStmt {
+                    span: DUMMY_SP,
+                    expr: Box::new(init_expr),
+                }))
+            }
             _ => panic!("Unsupported destructuring pattern {:?}", &local.pat),
         }
     } else {
