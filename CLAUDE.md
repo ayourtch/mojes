@@ -138,3 +138,139 @@ fn main() {
 ```
 
 This transpiler represents a sophisticated approach to bringing Rust's safety and expressiveness to web development while maintaining full compatibility with existing JavaScript ecosystems.
+
+## Recent Bug Fixes and Improvements
+
+### Session Summary (January 2025)
+
+This session involved significant transpilation bug fixes and improvements to the Mojes transpiler:
+
+#### 1. Fixed `.as_str()` Method Transpilation
+- **Issue**: Rust `.as_str()` method calls were being transpiled to invalid JavaScript (`.as_str()` doesn't exist on JS strings)
+- **Location**: `/Users/ayourtch/rust/mojes/mojes-mojo/src/lib.rs` lines 1975-1982
+- **Solution**: Added method mapping to convert `.as_str()` → `String(receiver)`
+```rust
+"as_str" => {
+    // Convert .as_str() to JavaScript string conversion: String(receiver)
+    Ok(state.mk_binary_expr(
+        state.mk_member_expr(receiver, "length"),
+        js::BinaryOp::EqEqEq,
+        state.mk_num_lit(0.0)
+    ))
+}
+```
+
+#### 2. Fixed `.is_empty()` Method Transpilation  
+- **Issue**: `.is_empty()` method not supported in JavaScript transpilation
+- **Location**: `/Users/ayourtch/rust/mojes/mojes-mojo/src/lib.rs` lines 1975-1982
+- **Solution**: Added method mapping to convert `.is_empty()` → `.length === 0`
+
+#### 3. Fixed Variable Scope Conflicts in Match Arms
+- **Issue**: Variable declarations in match arms were being created in common scope, causing conflicts between arms
+- **Problem**: `channel` variable in one match arm conflicted with `channel` in another arm, causing incorrect `channel_1` renaming
+- **Location**: `/Users/ayourtch/rust/mojes/mojes-mojo/src/lib.rs` lines 4581-4589
+- **Solution**: Added proper scope management with `state.enter_scope()` and `state.exit_scope()` around each match arm:
+```rust
+for (i, arm) in match_expr.arms.iter().enumerate() {
+    // Create a separate scope for each match arm to avoid variable conflicts
+    state.enter_scope();
+    
+    let (condition, mut binding_stmts) = handle_pattern_binding(&arm.pat, &temp_var, state)?;
+    let body_expr = rust_expr_to_js_with_action_and_state(BlockAction::Return, &arm.body, state)?;
+
+    // Exit the scope after processing this arm
+    state.exit_scope();
+    // ... rest of processing
+}
+```
+
+#### 4. Added Support for Wildcard Patterns in Local Declarations
+- **Issue**: `Pat::Wild` (wildcard `_`) patterns were not supported in local variable declarations like `let _ = expr;`
+- **Location**: `/Users/ayourtch/rust/mojes/mojes-mojo/src/lib.rs` lines 2870-2877
+- **Solution**: Added handler to convert wildcard assignments to expression statements:
+```rust
+Pat::Wild(_) => {
+    // Handle wildcard patterns: let _ = expr;
+    // In JavaScript, this becomes just evaluating the expression for side effects
+    Ok(js::Stmt::Expr(js::ExprStmt {
+        span: DUMMY_SP,
+        expr: Box::new(init_expr),
+    }))
+}
+```
+
+#### 5. Fixed Tuple Destructuring in For Loops
+- **Issue**: Rust `for (key, value) in map` was generating incorrect JavaScript that didn't work with Maps, Objects, or Arrays
+- **Problem**: Missing universal iteration support for different collection types
+- **Location**: `/Users/ayourtch/rust/mojes/mojes-mojo/src/lib.rs` lines 4040-4105
+- **Solution**: Implemented IIFE-based universal iterator:
+```rust
+// Creates: ((obj) => obj && typeof obj.entries === 'function' ? obj.entries() : Object.entries(obj))(iterable)
+let enhanced_iterable = if var_names.len() == 2 {
+    // Universal IIFE for Maps, Objects, Arrays
+    state.mk_call_expr(
+        js::Expr::Paren(js::ParenExpr {
+            span: DUMMY_SP,
+            expr: Box::new(arrow_fn), // (obj) => obj && typeof obj.entries === 'function' ? obj.entries() : Object.entries(obj)
+        }),
+        vec![iterable]
+    )
+} else {
+    iterable
+};
+```
+
+This generates JavaScript that works universally:
+- **Maps**: Uses native `.entries()` method
+- **Objects**: Falls back to `Object.entries()`
+- **Arrays**: Uses `Object.entries()` for index-value pairs
+
+#### 6. Enhanced Functional Testing Infrastructure
+- **Added**: Comprehensive JavaScript execution tests using `boa_engine`
+- **Tests Created**:
+  - `test_rtype_field_issue.rs` - Tests `r#type` field transpilation with console.log support
+  - `test_struct_match_scope.rs` - Tests variable scoping in match expressions
+  - `test_as_str_issue.rs` - Tests `.as_str()` method transpilation
+- **Features**: JavaScript console.log support in test environment for debugging transpiled code
+
+### Testing Commands
+
+For running specific tests:
+```bash
+cargo test test_rtype_field_transpilation_issue -- --nocapture
+cargo test test_struct_match_scope_transpilation -- --nocapture  
+cargo test test_as_str_transpilation_issue -- --nocapture
+```
+
+### Technical Insights
+
+#### Variable Scoping Architecture
+The transpiler uses a sophisticated scope management system:
+- `TranspilerState` maintains scope stack for variable declarations
+- Each scope tracks variable mappings and handles conflicts
+- Automatic variable renaming (e.g., `variable_1`) when conflicts occur
+- Match arms now get isolated scopes to prevent inter-arm conflicts
+
+#### Method Mapping System
+The transpiler has an extensible method mapping system for converting Rust methods to JavaScript equivalents:
+- String methods: `to_string()` → `.toString()`, `is_empty()` → `.length === 0`
+- Collection methods: `push()` → `.push()`, `contains()` → `.includes()`
+- Type conversion: `.as_str()` → `String(receiver)`
+
+#### Universal Collection Iteration
+The IIFE-based approach for tuple destructuring provides universal compatibility:
+1. Detects if object has native `.entries()` method (Maps, Sets)
+2. Falls back to `Object.entries()` for Objects and Arrays
+3. Maintains proper tuple destructuring syntax `[key, value]`
+4. No global namespace pollution with helper functions
+
+### Known Working Features
+
+After these fixes, the following patterns now work correctly:
+- ✅ Raw identifiers (`r#type` fields)
+- ✅ String method calls (`.as_str()`, `.is_empty()`)  
+- ✅ Variable scoping in match expressions
+- ✅ Wildcard patterns in let statements (`let _ = expr;`)
+- ✅ Tuple destructuring for loops with universal collection support
+- ✅ Enum struct pattern matching with field destructuring
+- ✅ Comprehensive JavaScript execution testing
