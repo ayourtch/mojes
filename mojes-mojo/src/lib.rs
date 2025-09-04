@@ -2711,6 +2711,91 @@ fn handle_method_call(
                 Ok(state.mk_binary_expr(null_check, js::BinaryOp::LogicalOr, undefined_check))
             }
         }
+        "contains_key" => {
+            // Universal contains_key: use has() for Maps, hasOwnProperty() for Objects
+            // ((obj, key) => obj && typeof obj.has === 'function' ? obj.has(key) : obj.hasOwnProperty(key))(receiver, key)
+            if js_args.len() == 1 {
+                // Create parameters for the IIFE
+                let obj_param = js::Pat::Ident(js::BindingIdent {
+                    id: state.mk_ident("obj"),
+                    type_ann: None,
+                });
+                let key_param = js::Pat::Ident(js::BindingIdent {
+                    id: state.mk_ident("key"),
+                    type_ann: None,
+                });
+                
+                // Create obj && typeof obj.has === 'function' check
+                let obj_exists = js::Expr::Ident(state.mk_ident("obj"));
+                let has_member = state.mk_member_expr(js::Expr::Ident(state.mk_ident("obj")), "has");
+                let typeof_has = js::Expr::Unary(js::UnaryExpr {
+                    span: DUMMY_SP,
+                    op: js::UnaryOp::TypeOf,
+                    arg: Box::new(has_member),
+                });
+                let is_function = state.mk_binary_expr(
+                    typeof_has,
+                    js::BinaryOp::EqEqEq,
+                    state.mk_str_lit("function")
+                );
+                let obj_and_has = state.mk_binary_expr(obj_exists, js::BinaryOp::LogicalAnd, is_function);
+                
+                // Create obj.has(key) call for Maps
+                let map_has = state.mk_call_expr(
+                    state.mk_member_expr(js::Expr::Ident(state.mk_ident("obj")), "has"),
+                    vec![js::Expr::Ident(state.mk_ident("key"))]
+                );
+                
+                // Create obj.hasOwnProperty(key) call for Objects  
+                let object_has = state.mk_call_expr(
+                    state.mk_member_expr(js::Expr::Ident(state.mk_ident("obj")), "hasOwnProperty"),
+                    vec![js::Expr::Ident(state.mk_ident("key"))]
+                );
+                
+                // Create conditional expression
+                let conditional = js::Expr::Cond(js::CondExpr {
+                    span: DUMMY_SP,
+                    test: Box::new(obj_and_has),
+                    cons: Box::new(map_has),
+                    alt: Box::new(object_has),
+                });
+                
+                // Create IIFE: (obj, key) => conditional
+                let iife = js::ArrowExpr {
+                    span: DUMMY_SP,
+                    params: vec![obj_param, key_param],
+                    body: Box::new(js::BlockStmtOrExpr::Expr(Box::new(conditional))),
+                    is_async: false,
+                    is_generator: false,
+                    type_params: None,
+                    return_type: None,
+                    ctxt: SyntaxContext::empty(),
+                };
+                
+                // Call the IIFE with receiver and key: ((obj, key) => ...)(receiver, key)
+                Ok(js::Expr::Call(js::CallExpr {
+                    span: DUMMY_SP,
+                    callee: js::Callee::Expr(Box::new(js::Expr::Paren(js::ParenExpr {
+                        span: DUMMY_SP,
+                        expr: Box::new(js::Expr::Arrow(iife)),
+                    }))),
+                    args: vec![
+                        js::ExprOrSpread {
+                            spread: None,
+                            expr: Box::new(receiver),
+                        },
+                        js::ExprOrSpread {
+                            spread: None,
+                            expr: Box::new(js_args[0].clone()),
+                        },
+                    ],
+                    type_args: None,
+                    ctxt: SyntaxContext::empty(),
+                }))
+            } else {
+                Err(format!("contains_key expects exactly 1 argument, got {}", js_args.len()))
+            }
+        }
         "unwrap" => {
             // .unwrap() is just the value itself in JavaScript
             Ok(receiver)
