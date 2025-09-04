@@ -668,6 +668,83 @@ fn convert_if_to_stmt(
     }))
 }
 
+/// Core function that converts Rust if expression to JavaScript if statement with retval support
+fn convert_if_to_stmt_with_retval(
+    block_action: BlockAction,
+    if_expr: &syn::ExprIf,
+    retval_var: Option<&str>,
+    state: &mut TranspilerState,
+) -> Result<js::Stmt, String> {
+    debug_print!("DEBUG IF WITH RETVAL: {:?} {:?}", &block_action, &if_expr);
+    // Check if this is an if-let expression
+    if let Some(if_let_stmt) = handle_if_let_as_stmt(block_action, if_expr, state)? {
+        return Ok(if_let_stmt);
+    }
+
+    // Regular if expression
+    let test = rust_expr_to_js_with_state(&if_expr.cond, state)?;
+    let consequent_stmts = rust_block_to_js_with_retval(block_action, &if_expr.then_branch, retval_var, state)?;
+
+    let consequent = js::Stmt::Block(js::BlockStmt {
+        span: DUMMY_SP,
+        stmts: consequent_stmts,
+        ctxt: SyntaxContext::empty(),
+    });
+
+    // Handle else branch
+    let alternate = if let Some((_, else_branch)) = &if_expr.else_branch {
+        match &**else_branch {
+            Expr::Block(else_block) => {
+                let else_stmts =
+                    rust_block_to_js_with_retval(block_action, &else_block.block, retval_var, state)?;
+                Some(Box::new(js::Stmt::Block(js::BlockStmt {
+                    span: DUMMY_SP,
+                    stmts: else_stmts,
+                    ctxt: SyntaxContext::empty(),
+                })))
+            }
+            Expr::If(nested_if) => {
+                // Handle else if - recursively convert
+                Some(Box::new(convert_if_to_stmt_with_retval(
+                    block_action,
+                    nested_if,
+                    retval_var,
+                    state,
+                )?))
+            }
+            _ => {
+                // Single expression else - assign to retval if provided
+                let else_expr = rust_expr_to_js_with_state(else_branch, state)?;
+                let stmt = if let Some(var_name) = retval_var {
+                    // Create assignment: _rust_retval = expression;
+                    state.mk_expr_stmt(js::Expr::Assign(js::AssignExpr {
+                        span: DUMMY_SP,
+                        op: js::AssignOp::Assign,
+                        left: js::AssignTarget::Simple(js::SimpleAssignTarget::Ident(state.mk_ident(var_name).into())),
+                        right: Box::new(else_expr),
+                    }))
+                } else {
+                    state.mk_expr_stmt(else_expr)
+                };
+                Some(Box::new(js::Stmt::Block(js::BlockStmt {
+                    span: DUMMY_SP,
+                    stmts: vec![stmt],
+                    ctxt: SyntaxContext::empty(),
+                })))
+            }
+        }
+    } else {
+        None
+    };
+
+    Ok(js::Stmt::If(js::IfStmt {
+        span: DUMMY_SP,
+        test: Box::new(test),
+        cons: Box::new(consequent),
+        alt: alternate,
+    }))
+}
+
 /// Enhanced if-let handling that returns a statement
 fn handle_if_let_as_stmt(
     block_action: BlockAction,
@@ -924,13 +1001,22 @@ fn handle_if_expr(
         return Ok(if_let_expr);
     }
 
-    // For regular if expressions, convert to statement and wrap in IIFE
-    let if_stmt = convert_if_to_stmt(block_action, if_expr, state)?;
-
-    // Wrap in IIFE and add a default return
-    let mut stmts = vec![if_stmt];
-    stmts.push(state.mk_return_stmt(Some(state.mk_undefined())));
-
+    // For regular if expressions, use the _rust_retval approach
+    // Create a unique variable name for the return value
+    let retval_var = "_rust_retval";
+    
+    // Create the variable declaration: let _rust_retval = undefined;
+    let retval_decl = state.mk_var_decl(retval_var, Some(state.mk_undefined()), false);
+    
+    // Convert if expression to statement, passing the retval variable
+    let if_stmt = convert_if_to_stmt_with_retval(block_action, if_expr, Some(retval_var), state)?;
+    
+    // Create return statement: return _rust_retval;
+    let return_stmt = state.mk_return_stmt(Some(js::Expr::Ident(state.mk_ident(retval_var))));
+    
+    // Wrap in IIFE with retval declaration, if statement, and return
+    let stmts = vec![retval_decl, if_stmt, return_stmt];
+    
     Ok(state.mk_iife(stmts))
 }
 
@@ -1071,6 +1157,16 @@ pub fn rust_block_to_js_with_state(
     rust_block_to_js_with_params_and_state(block_action, block, &[], state)
 }
 
+/// Convert Rust block to JavaScript statements with retval variable support
+pub fn rust_block_to_js_with_retval(
+    block_action: BlockAction,
+    block: &Block,
+    retval_var: Option<&str>,
+    state: &mut TranspilerState,
+) -> Result<Vec<js::Stmt>, String> {
+    rust_block_to_js_with_params_and_retval(block_action, block, &[], retval_var, state)
+}
+
 /// Convert Rust block to JavaScript statements with function parameters
 pub fn rust_block_to_js_with_params_and_state(
     block_action: BlockAction,
@@ -1149,17 +1245,147 @@ pub fn rust_block_to_js_with_params_and_state(
                             "DEBUG EXPR IN BLOCK (block action: {:?}) : {:?}, semi: {:?}",
                             &block_action, &x, &semi
                         );
+                        if semi.is_some() {
+                            // Expression with semicolon - treat as statement
+                            let js_expr = rust_expr_to_js_with_state(expr, state)?;
+                            js_stmts.push(state.mk_expr_stmt(js_expr));
+                        } else {
+                            // Expression without semicolon - check if it's the last statement
+                            let is_last_stmt = stmt == block.stmts.last().unwrap();
+                            if is_last_stmt && block_action == BlockAction::Return {
+                                // For last statement in return context, use BlockAction::Return
+                                // so that block expressions can use _rust_retval approach
+                                let js_expr = rust_expr_to_js_with_action_and_state(BlockAction::Return, expr, state)?;
+                                debug_print!("DEBUG BLOCK: return statement: {:?}", block_action);
+                                js_stmts.push(state.mk_return_stmt(Some(js_expr)));
+                            } else {
+                                // For non-return contexts, use BlockAction::NoReturn
+                                let js_expr = rust_expr_to_js_with_state(expr, state)?;
+                                js_stmts.push(state.mk_expr_stmt(js_expr));
+                            }
+                        }
+                    }
+                }
+            }
+            Stmt::Macro(mac_stmt) => {
+                let js_expr = handle_macro_expr(&mac_stmt.mac, state)?;
+                js_stmts.push(state.mk_expr_stmt(js_expr));
+            }
+            _ => {
+                state.add_warning(format!("Unsupported statement type: {:?}", stmt));
+                panic!("Unsupported statement type: {:?}", stmt);
+            }
+        }
+    }
+
+    state.exit_scope();
+    Ok(js_stmts)
+}
+
+/// Convert Rust block to JavaScript statements with function parameters and retval support
+pub fn rust_block_to_js_with_params_and_retval(
+    block_action: BlockAction,
+    block: &Block,
+    params: &[(String, String)], // (rust_name, js_name) pairs
+    retval_var: Option<&str>,
+    state: &mut TranspilerState,
+) -> Result<Vec<js::Stmt>, String> {
+    let mut js_stmts = Vec::new();
+    debug_print!("DEBUG BLK WITH RETVAL: {:?} {:?}", &block_action, &block);
+    
+    state.enter_scope();
+    
+    // Register function parameters in the function body scope
+    for (rust_name, js_name) in params {
+        state.declare_variable(rust_name.clone(), js_name.clone(), false);
+    }
+
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::Local(local) => {
+                debug_print!("DEBUG BLOCK LOCAL: {:?}", &local);
+                let js_stmt = handle_local_statement(block_action, local, state)?;
+                js_stmts.push(js_stmt);
+            }
+            Stmt::Item(item) => match item {
+                syn::Item::Fn(item_fn) => {
+                    let js_stmt = handle_function_definition(item_fn, state)?;
+                    js_stmts.push(js_stmt);
+                }
+                syn::Item::Struct(item_struct) => {
+                    panic!(
+                        "Struct definitions in blocks not fully supported: {:?}",
+                        item
+                    );
+                }
+                syn::Item::Enum(item_enum) => {
+                    panic!("Enum definitions in blocks not fully supported: {:?}", item);
+                }
+                _ => {
+                    panic!("Unsupported item type in block: {:?}", item);
+                }
+            },
+            Stmt::Expr(expr, semi) => {
+                match expr {
+                    Expr::Return(ret) => {
+                        // Handle return expressions properly
+                        if let Some(return_expr) = &ret.expr {
+                            let js_expr = rust_expr_to_js_with_state(return_expr, state)?;
+                            js_stmts.push(state.mk_return_stmt(Some(js_expr)));
+                        } else {
+                            js_stmts.push(state.mk_return_stmt(None));
+                        }
+                    }
+                    Expr::ForLoop(for_expr) => {
+                        // Generate direct statement
+                        let for_stmt = convert_for_to_stmt_enhanced(for_expr, state)?;
+                        js_stmts.push(for_stmt);
+                    }
+                    Expr::While(while_expr) => {
+                        // Generate direct statement
+                        let while_stmt =
+                            convert_while_to_stmt_legacy_compatible(while_expr, state)?;
+                        js_stmts.push(while_stmt);
+                    }
+                    Expr::If(if_expr) => {
+                        // Generate direct statement with retval support
+                        let if_stmt = if retval_var.is_some() {
+                            convert_if_to_stmt_with_retval(block_action, if_expr, retval_var, state)?
+                        } else {
+                            convert_if_to_stmt(block_action, if_expr, state)?
+                        };
+                        debug_print!("DEBUG IFIN BLOCK: {:?}", if_stmt);
+                        js_stmts.push(if_stmt);
+                    }
+                    x => {
+                        debug_print!(
+                            "DEBUG EXPR IN BLOCK WITH RETVAL (block action: {:?}, retval_var: {:?}) : {:?}, semi: {:?}",
+                            &block_action, &retval_var, &x, &semi
+                        );
                         let js_expr = rust_expr_to_js_with_state(expr, state)?;
 
                         if semi.is_some() {
                             // Expression with semicolon - treat as statement
                             js_stmts.push(state.mk_expr_stmt(js_expr));
                         } else {
-                            // Expression without semicolon - only return if it's the last statement
+                            // Expression without semicolon - this should be captured in retval
                             let is_last_stmt = stmt == block.stmts.last().unwrap();
-                            if is_last_stmt && block_action == BlockAction::Return {
-                                debug_print!("DEBUG BLOCK: return statement: {:?}", block_action);
-                                js_stmts.push(state.mk_return_stmt(Some(js_expr)));
+                            if is_last_stmt {
+                                if let Some(var_name) = retval_var {
+                                    // Assign to retval variable: _rust_retval = expression;
+                                    js_stmts.push(state.mk_expr_stmt(js::Expr::Assign(js::AssignExpr {
+                                        span: DUMMY_SP,
+                                        op: js::AssignOp::Assign,
+                                        left: js::AssignTarget::Simple(js::SimpleAssignTarget::Ident(state.mk_ident(var_name).into())),
+                                        right: Box::new(js_expr),
+                                    })));
+                                } else if block_action == BlockAction::Return {
+                                    // Regular return behavior when no retval var
+                                    debug_print!("DEBUG BLOCK: return statement: {:?}", block_action);
+                                    js_stmts.push(state.mk_return_stmt(Some(js_expr)));
+                                } else {
+                                    js_stmts.push(state.mk_expr_stmt(js_expr));
+                                }
                             } else {
                                 js_stmts.push(state.mk_expr_stmt(js_expr));
                             }
@@ -1480,8 +1706,35 @@ pub fn rust_expr_to_js_with_action_and_state(
         // Handle block expressions
         Expr::Block(block_expr) => {
             debug_print!("DEBUG EXPR block action: {:?}", block_action);
-            let stmts = rust_block_to_js_with_state(block_action, &block_expr.block, state)?;
-            Ok(state.mk_iife(stmts))
+            
+            // Check if this block expression is being used as a value
+            match block_action {
+                BlockAction::Return => {
+                    // Use _rust_retval approach for value-returning block expressions
+                    let retval_var = "_rust_retval";
+                    
+                    // Create the variable declaration: let _rust_retval = undefined;
+                    let retval_decl = state.mk_var_decl(retval_var, Some(state.mk_undefined()), false);
+                    
+                    // Process block statements with retval support
+                    let block_stmts = rust_block_to_js_with_retval(block_action, &block_expr.block, Some(retval_var), state)?;
+                    
+                    // Create return statement: return _rust_retval;
+                    let return_stmt = state.mk_return_stmt(Some(js::Expr::Ident(state.mk_ident(retval_var))));
+                    
+                    // Combine all statements
+                    let mut all_stmts = vec![retval_decl];
+                    all_stmts.extend(block_stmts);
+                    all_stmts.push(return_stmt);
+                    
+                    Ok(state.mk_iife(all_stmts))
+                }
+                _ => {
+                    // For non-value contexts, use the original approach
+                    let stmts = rust_block_to_js_with_state(block_action, &block_expr.block, state)?;
+                    Ok(state.mk_iife(stmts))
+                }
+            }
         }
 
         // Handle array literals
