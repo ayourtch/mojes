@@ -91,8 +91,8 @@ fn test_nested_block_expressions() {
     println!("DEBUG test_nested_block_expressions js code: {}", &js_code);
     assert_eq!(js_code.matches("call(this)").count(), 2);
     assert!(js_code.contains("const temp = x + 1"));
-    assert!(js_code.contains("return temp * 2"));
-    assert!(js_code.contains("return temp2 / 10"));
+    assert!(js_code.contains("_rust_retval = temp * 2"));
+    assert!(js_code.contains("_rust_retval = temp2 / 10"));
 }
 
 // ==================== 4. UNARY DEREFERENCE OPERATOR ====================
