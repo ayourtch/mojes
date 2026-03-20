@@ -45,7 +45,7 @@ fn test_match_struct_pattern() {
 
 #[test]
 fn test_match_tuple_pattern() {
-    // Tests tuple pattern in match — only ident/wildcard elements are supported
+    // Tests tuple pattern with variable bindings
     let block: Block = parse_quote! {
         {
             let pair = (1, 2);
@@ -58,6 +58,25 @@ fn test_match_tuple_pattern() {
     let js = rust_block_to_js(&block);
     println!("JS tuple match: {}", &js);
     assert!(js.contains("[0]") || js.contains("[1]") || js.contains("_match_value"));
+}
+
+#[test]
+#[ignore = "Literal elements in tuple match patterns not yet supported — panics with 'Unsupported pattern in tuple: Pat::Lit'"]
+fn test_match_tuple_pattern_with_literals() {
+    // Tests tuple pattern with literal values like (0, y) — currently unsupported
+    let block: Block = parse_quote! {
+        {
+            let pair = (1, 2);
+            match pair {
+                (0, y) => y,
+                (x, 0) => x,
+                (x, y) => x + y,
+            }
+        }
+    };
+    let js = rust_block_to_js(&block);
+    println!("JS tuple literal match: {}", &js);
+    assert!(js.contains("[0]") || js.contains("[1]"));
 }
 
 #[test]

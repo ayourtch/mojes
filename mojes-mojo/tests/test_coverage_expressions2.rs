@@ -63,8 +63,9 @@ fn test_break_with_value() {
 }
 
 #[test]
-fn test_break_without_value() {
-    // Tests Expr::Break without value (lines 1884-1887)
+#[ignore = "break in expression context generates undefined instead of break statement"]
+fn test_break_without_value_generates_break() {
+    // Tests Expr::Break without value — should generate a JS `break` statement
     let block: Block = parse_quote! {
         {
             loop {
@@ -74,19 +75,34 @@ fn test_break_without_value() {
     };
     let js = rust_block_to_js(&block);
     println!("JS break no val: {}", &js);
-    // break generates undefined in expr context
+    assert!(js.contains("break"));
 }
 
 #[test]
+fn test_break_without_value() {
+    // Tests that break without value currently transpiles (even if imperfectly)
+    let block: Block = parse_quote! {
+        {
+            loop {
+                break;
+            }
+        }
+    };
+    let js = rust_block_to_js(&block);
+    println!("JS break no val: {}", &js);
+    // Currently generates undefined, but the code at least doesn't panic
+}
+
+#[test]
+#[ignore = "continue transpiles to undefined instead of actual continue statement — see JS_COVERAGE_REPORT.md"]
 fn test_continue_expression() {
-    // Tests Expr::Continue (lines 1890-1892)
+    // Tests Expr::Continue — should generate a JS `continue` statement
     let expr: Expr = parse_quote! {
         continue
     };
     let js = rust_expr_to_js(&expr);
     println!("JS continue: {}", &js);
-    // Currently transpiles to undefined
-    assert!(js.contains("undefined") || js.contains("void"));
+    assert!(js.contains("continue"));
 }
 
 #[test]
