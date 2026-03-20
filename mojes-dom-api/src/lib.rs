@@ -1119,6 +1119,160 @@ impl MessageEvent {
     }
 }
 
+// KeyboardEvent interface
+// #[js_type] - Browser built-in, do not export
+#[derive(Clone, Debug)]
+pub struct KeyboardEvent {
+    pub key: String,
+    pub code: String,
+    pub ctrlKey: bool,
+    pub shiftKey: bool,
+    pub altKey: bool,
+    pub metaKey: bool,
+    pub repeat: bool,
+}
+
+impl KeyboardEvent {
+    pub fn new() -> Self {
+        println!("KEYBOARD_EVENT.NEW: creating new KeyboardEvent");
+        Self {
+            key: String::new(),
+            code: String::new(),
+            ctrlKey: false,
+            shiftKey: false,
+            altKey: false,
+            metaKey: false,
+            repeat: false,
+        }
+    }
+
+    pub fn getModifierState(&self, key: &str) -> bool {
+        println!("KEYBOARD_EVENT.GET_MODIFIER_STATE: checking modifier {}", key);
+        match key {
+            "Control" => self.ctrlKey,
+            "Shift" => self.shiftKey,
+            "Alt" => self.altKey,
+            "Meta" => self.metaKey,
+            _ => false,
+        }
+    }
+}
+
+// MouseEvent interface
+// #[js_type] - Browser built-in, do not export
+#[derive(Clone, Debug)]
+pub struct MouseEvent {
+    pub clientX: f64,
+    pub clientY: f64,
+    pub pageX: f64,
+    pub pageY: f64,
+    pub screenX: f64,
+    pub screenY: f64,
+    pub button: i32,
+    pub buttons: i32,
+    pub ctrlKey: bool,
+    pub shiftKey: bool,
+    pub altKey: bool,
+    pub metaKey: bool,
+}
+
+impl MouseEvent {
+    pub fn new() -> Self {
+        println!("MOUSE_EVENT.NEW: creating new MouseEvent");
+        Self {
+            clientX: 0.0,
+            clientY: 0.0,
+            pageX: 0.0,
+            pageY: 0.0,
+            screenX: 0.0,
+            screenY: 0.0,
+            button: 0,
+            buttons: 0,
+            ctrlKey: false,
+            shiftKey: false,
+            altKey: false,
+            metaKey: false,
+        }
+    }
+}
+
+// Touch interface
+// #[js_type] - Browser built-in, do not export
+#[derive(Clone, Debug)]
+pub struct Touch {
+    pub identifier: i32,
+    pub clientX: f64,
+    pub clientY: f64,
+    pub pageX: f64,
+    pub pageY: f64,
+}
+
+// TouchEvent interface
+// #[js_type] - Browser built-in, do not export
+#[derive(Clone, Debug)]
+pub struct TouchEvent {
+    pub touches: Vec<Touch>,
+}
+
+impl TouchEvent {
+    pub fn new() -> Self {
+        println!("TOUCH_EVENT.NEW: creating new TouchEvent");
+        Self {
+            touches: Vec::new(),
+        }
+    }
+}
+
+// InputEvent interface
+// #[js_type] - Browser built-in, do not export
+#[derive(Clone, Debug)]
+pub struct InputEvent {
+    pub data: String,
+    pub inputType: String,
+}
+
+impl InputEvent {
+    pub fn new() -> Self {
+        println!("INPUT_EVENT.NEW: creating new InputEvent");
+        Self {
+            data: String::new(),
+            inputType: String::new(),
+        }
+    }
+}
+
+// FocusEvent interface
+// #[js_type] - Browser built-in, do not export
+#[derive(Clone, Debug)]
+pub struct FocusEvent {
+    pub relatedTarget: Option<String>,
+}
+
+impl FocusEvent {
+    pub fn new() -> Self {
+        println!("FOCUS_EVENT.NEW: creating new FocusEvent");
+        Self {
+            relatedTarget: None,
+        }
+    }
+}
+
+// CustomEvent interface
+// #[js_type] - Browser built-in, do not export
+#[derive(Clone, Debug)]
+pub struct CustomEvent {
+    pub detail: String,
+}
+
+impl CustomEvent {
+    pub fn new(type_name: &str, detail: &str) -> Self {
+        println!("CUSTOM_EVENT.NEW: creating new CustomEvent of type '{}' with detail '{}'", type_name, detail);
+        Self {
+            detail: detail.to_string(),
+        }
+    }
+}
+
 // Global instances that will be available in Rust code - using const constructors
 pub static document: Document = Document::new();
 pub static console: Console = Console::new();
