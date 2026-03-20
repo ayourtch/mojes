@@ -61,7 +61,6 @@ fn test_match_tuple_pattern() {
 }
 
 #[test]
-#[ignore = "Literal elements in tuple match patterns not yet supported — panics with 'Unsupported pattern in tuple: Pat::Lit'"]
 fn test_match_tuple_pattern_with_literals() {
     // Tests tuple pattern with literal values like (0, y) — currently unsupported
     let block: Block = parse_quote! {

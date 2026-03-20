@@ -67,7 +67,6 @@ fn test_match_tuple_with_ident_elements() {
 }
 
 #[test]
-#[ignore = "Wildcard inside tuple match patterns not yet supported — panics at lib.rs:5840"]
 fn test_match_tuple_with_wildcard_element() {
     // Tests Pat::Wild inside tuple pattern — currently unsupported
     let block: Block = parse_quote! {

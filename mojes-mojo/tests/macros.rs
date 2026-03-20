@@ -428,7 +428,6 @@ fn test_multiple_unsupported_macros_panic() {
         parse_quote!(custom_macro!()),
         parse_quote!(unknown_macro!("arg")),
         parse_quote!(debug_assert!(condition)),
-        parse_quote!(panic!("message")), // This might actually be supported, adjust if needed
         parse_quote!(compile_error!("error")),
         parse_quote!(include_str!("file.txt")),
         parse_quote!(cfg!(feature = "test")),
