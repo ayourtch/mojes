@@ -317,32 +317,6 @@ impl TranspilerState {
         let call_expr = self.mk_member_expr(wrapped_fn, "call");
         self.mk_call_expr(call_expr, vec![self.mk_this_expr()])
     }
-    pub fn mk_iife_without_context(&self, stmts: Vec<js::Stmt>) -> js::Expr {
-        let body = js::BlockStmt {
-            span: DUMMY_SP,
-            stmts,
-            ctxt: SyntaxContext::empty(),
-        };
-
-        let arrow_fn = js::ArrowExpr {
-            span: DUMMY_SP,
-            params: vec![],
-            body: Box::new(js::BlockStmtOrExpr::BlockStmt(body)),
-            is_async: false,
-            is_generator: false,
-            type_params: None,
-            return_type: None,
-            ctxt: SyntaxContext::empty(),
-        };
-
-        // Wrap just the arrow function in parentheses for proper JavaScript syntax
-        let wrapped_arrow = js::Expr::Paren(js::ParenExpr {
-            span: DUMMY_SP,
-            expr: Box::new(js::Expr::Arrow(arrow_fn)),
-        });
-
-        self.mk_call_expr(wrapped_arrow, vec![])
-    }
     pub fn mk_var_decl(&self, name: &str, init: Option<js::Expr>, is_const: bool) -> js::Stmt {
         let kind = if is_const {
             js::VarDeclKind::Const
@@ -583,10 +557,6 @@ fn generate_js_method(
         span: DUMMY_SP,
         expr: Box::new(assignment),
     })))
-}
-
-fn can_be_statement(expr: &Expr) -> bool {
-    matches!(expr, Expr::While(_) | Expr::ForLoop(_) | Expr::Loop(_))
 }
 
 /*
@@ -1134,20 +1104,6 @@ fn convert_if_let_some_to_expr(
     Ok(state.mk_iife(stmts))
 }
 
-/// Context-aware wrapper for if expressions
-pub fn handle_if_context_aware(
-    block_action: BlockAction,
-    if_expr: &syn::ExprIf,
-    state: &mut TranspilerState,
-    in_statement_context: bool,
-) -> Result<Either<js::Stmt, js::Expr>, String> {
-    if in_statement_context {
-        convert_if_to_stmt(block_action, if_expr, state).map(Either::Left)
-    } else {
-        handle_if_expr(block_action, if_expr, state).map(Either::Right)
-    }
-}
-
 /// Convert Rust block to JavaScript statements
 pub fn rust_block_to_js_with_state(
     block_action: BlockAction,
@@ -1500,14 +1456,6 @@ pub fn rust_expr_to_js_with_state(
     state: &mut TranspilerState,
 ) -> Result<js::Expr, String> {
     rust_expr_to_js_with_action_and_state(BlockAction::NoReturn, expr, state)
-}
-
-pub fn rust_expr_misc(
-    block_action: BlockAction,
-    expr: &Expr,
-    state: &mut TranspilerState,
-) -> Result<js::Expr, String> {
-    Err("test".to_string())
 }
 
 /// Convert Rust expression to JavaScript expression
@@ -4514,19 +4462,6 @@ fn convert_while_to_stmt_legacy_compatible(
     }
 }
 
-/// Context-aware wrapper that chooses between statement and expression handling
-pub fn handle_while_context_aware(
-    while_expr: &syn::ExprWhile,
-    state: &mut TranspilerState,
-    in_statement_context: bool,
-) -> Result<Either<js::Stmt, js::Expr>, String> {
-    if in_statement_context {
-        convert_while_to_stmt_legacy_compatible(while_expr, state).map(Either::Left)
-    } else {
-        handle_while_expr(while_expr, state).map(Either::Right)
-    }
-}
-
 /// Core function that converts Rust for loop to JavaScript for-of statement
 fn convert_for_to_stmt(
     for_expr: &syn::ExprForLoop,
@@ -4836,25 +4771,6 @@ fn detect_enumerate_pattern(expr: &Expr) -> Option<Expr> {
         }
     }
     None
-}
-
-/// Context-aware wrapper that chooses between statement and expression handling
-pub fn handle_for_context_aware(
-    for_expr: &syn::ExprForLoop,
-    state: &mut TranspilerState,
-    in_statement_context: bool,
-) -> Result<Either<js::Stmt, js::Expr>, String> {
-    if in_statement_context {
-        convert_for_to_stmt_enhanced(for_expr, state).map(Either::Left)
-    } else {
-        handle_for_expr(for_expr, state).map(Either::Right)
-    }
-}
-
-// Helper enum for returning either statement or expression
-pub enum Either<L, R> {
-    Left(L),
-    Right(R),
 }
 
 /// Handle pattern matching and variable binding - shared between match and if-let
@@ -5281,126 +5197,6 @@ fn handle_match_expr(
     stmts.push(state.mk_return_stmt(Some(state.mk_undefined())));
 
     Ok(state.mk_iife(stmts))
-}
-
-/// Create a condition expression for a match arm pattern
-fn create_match_condition(
-    pat: &Pat,
-    match_var: &str,
-    state: &mut TranspilerState,
-) -> Result<js::Expr, String> {
-    match pat {
-        Pat::Lit(lit_pat) => {
-            let lit_expr = match &lit_pat.lit {
-                syn::Lit::Str(s) => state.mk_str_lit(&s.value()),
-                syn::Lit::Int(i) => {
-                    let value = i
-                        .base10_parse::<f64>()
-                        .map_err(|e| format!("Failed to parse integer: {}", e))?;
-                    state.mk_num_lit(value)
-                }
-                syn::Lit::Float(f) => {
-                    let value = f
-                        .base10_parse::<f64>()
-                        .map_err(|e| format!("Failed to parse float: {}", e))?;
-                    state.mk_num_lit(value)
-                }
-                syn::Lit::Bool(b) => state.mk_bool_lit(b.value()),
-                syn::Lit::Char(c) => state.mk_str_lit(&c.value().to_string()),
-                x => panic!("Unsupported literal in match pattern: {:?}", x),
-            };
-
-            Ok(state.mk_binary_expr(
-                js::Expr::Ident(state.mk_ident(match_var)),
-                js::BinaryOp::EqEqEq,
-                lit_expr,
-            ))
-        }
-        Pat::Wild(_) => {
-            // Wildcard pattern always matches
-            Ok(state.mk_bool_lit(true))
-        }
-        Pat::Ident(pat_ident) => {
-            // Variable binding - always matches, but we need to bind the variable
-            let var_name = pat_ident.ident.to_string();
-            let js_var_name = escape_js_identifier(&var_name);
-            state.declare_variable(var_name, js_var_name, false);
-            Ok(state.mk_bool_lit(true))
-        }
-        Pat::Path(path_pat) => {
-            // Handle enum variants like None, Some
-            if let Some(segment) = path_pat.path.segments.last() {
-                let variant_name = segment.ident.to_string();
-                match variant_name.as_str() {
-                    "None" => {
-                        // Check for null or undefined
-                        let null_check = state.mk_binary_expr(
-                            js::Expr::Ident(state.mk_ident(match_var)),
-                            js::BinaryOp::EqEqEq,
-                            state.mk_null_lit(),
-                        );
-                        let undefined_check = state.mk_binary_expr(
-                            js::Expr::Ident(state.mk_ident(match_var)),
-                            js::BinaryOp::EqEqEq,
-                            state.mk_undefined(),
-                        );
-                        Ok(state.mk_binary_expr(
-                            null_check,
-                            js::BinaryOp::LogicalOr,
-                            undefined_check,
-                        ))
-                    }
-                    _ => {
-                        // For other enum variants, compare against string
-                        Ok(state.mk_binary_expr(
-                            js::Expr::Ident(state.mk_ident(match_var)),
-                            js::BinaryOp::EqEqEq,
-                            state.mk_str_lit(&variant_name),
-                        ))
-                    }
-                }
-            } else {
-                Err("Invalid path pattern".to_string())
-            }
-        }
-        Pat::TupleStruct(tuple_struct) => {
-            // Handle Some(x) patterns
-            if let Some(segment) = tuple_struct.path.segments.last() {
-                if segment.ident == "Some" {
-                    // Check that value is not null/undefined
-                    let not_null = state.mk_binary_expr(
-                        js::Expr::Ident(state.mk_ident(match_var)),
-                        js::BinaryOp::NotEqEq,
-                        state.mk_null_lit(),
-                    );
-                    let not_undefined = state.mk_binary_expr(
-                        js::Expr::Ident(state.mk_ident(match_var)),
-                        js::BinaryOp::NotEqEq,
-                        state.mk_undefined(),
-                    );
-
-                    // If there's a variable binding in the pattern, handle it
-                    if let Some(inner_pat) = tuple_struct.elems.first() {
-                        if let Pat::Ident(pat_ident) = inner_pat {
-                            let var_name = pat_ident.ident.to_string();
-                            let js_var_name = escape_js_identifier(&var_name);
-                            state.declare_variable(var_name, js_var_name, false);
-                        }
-                    }
-
-                    Ok(state.mk_binary_expr(not_null, js::BinaryOp::LogicalAnd, not_undefined))
-                } else {
-                    panic!("Unsupported tuple struct pattern {:?}", &segment);
-                }
-            } else {
-                panic!(
-                    "Invalid tuple struct pattern {:?}",
-                    &tuple_struct.path.segments
-                )
-            }
-        }
-        x => panic!("Unsupported match pattern {:?}", &x),
-    }
 }
 
 /// Helper function to chain if statements for match arms
@@ -6077,147 +5873,7 @@ pub fn generate_js_class_for_struct(input_struct: &ItemStruct) -> String {
     ast_to_code(&[module_item]).expect("Failed to convert struct AST to JavaScript code")
 }
 
-// Helper function to create enum toJSON method
-fn create_enum_to_json_method(
-    input_enum: &ItemEnum,
-    state: &mut TranspilerState,
-) -> Result<js::ClassMethod, String> {
-    // Create switch expression that handles all enum variants
-    let mut switch_cases = Vec::new();
-    
-    for variant in &input_enum.variants {
-        let variant_name = variant.ident.to_string();
-        
-        match &variant.fields {
-            Fields::Unit => {
-                // Unit variants: return just the string
-                let return_stmt = state.mk_return_stmt(Some(state.mk_str_lit(&variant_name)));
-                switch_cases.push(js::SwitchCase {
-                    span: DUMMY_SP,
-                    test: Some(Box::new(state.mk_str_lit(&variant_name))),
-                    cons: vec![return_stmt],
-                });
-            }
-            Fields::Unnamed(fields) => {
-                // Tuple variants: return object with type and value0, value1, etc.
-                let mut props = vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
-                    js::KeyValueProp {
-                        key: js::PropName::Ident(state.mk_ident_name("type")),
-                        value: Box::new(state.mk_str_lit(&variant_name)),
-                    },
-                )))];
-                
-                for i in 0..fields.unnamed.len() {
-                    let field_name = format!("value{}", i);
-                    props.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
-                        js::KeyValueProp {
-                            key: js::PropName::Ident(state.mk_ident_name(&field_name)),
-                            value: Box::new(state.mk_member_expr(
-                                js::Expr::This(js::ThisExpr { span: DUMMY_SP }),
-                                &field_name
-                            )),
-                        },
-                    ))));
-                }
-                
-                let obj = js::Expr::Object(js::ObjectLit {
-                    span: DUMMY_SP,
-                    props,
-                });
-                
-                let return_stmt = state.mk_return_stmt(Some(obj));
-                switch_cases.push(js::SwitchCase {
-                    span: DUMMY_SP,
-                    test: Some(Box::new(state.mk_str_lit(&variant_name))),
-                    cons: vec![return_stmt],
-                });
-            }
-            Fields::Named(fields) => {
-                // Struct variants: return object with type and named fields
-                let mut props = vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
-                    js::KeyValueProp {
-                        key: js::PropName::Ident(state.mk_ident_name("type")),
-                        value: Box::new(state.mk_str_lit(&variant_name)),
-                    },
-                )))];
-                
-                for field in &fields.named {
-                    if let Some(field_name) = &field.ident {
-                        let field_name_str = field_name.to_string();
-                        props.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
-                            js::KeyValueProp {
-                                key: js::PropName::Ident(state.mk_ident_name(&field_name_str)),
-                                value: Box::new(state.mk_member_expr(
-                                    js::Expr::This(js::ThisExpr { span: DUMMY_SP }),
-                                    &field_name_str
-                                )),
-                            },
-                        ))));
-                    }
-                }
-                
-                let obj = js::Expr::Object(js::ObjectLit {
-                    span: DUMMY_SP,
-                    props,
-                });
-                
-                let return_stmt = state.mk_return_stmt(Some(obj));
-                switch_cases.push(js::SwitchCase {
-                    span: DUMMY_SP,
-                    test: Some(Box::new(state.mk_str_lit(&variant_name))),
-                    cons: vec![return_stmt],
-                });
-            }
-        }
-    }
-    
-    // Create switch statement: switch(this.type || this) { ... }
-    let discriminant = js::Expr::Bin(js::BinExpr {
-        span: DUMMY_SP,
-        op: js::BinaryOp::LogicalOr,
-        left: Box::new(state.mk_member_expr(
-            js::Expr::This(js::ThisExpr { span: DUMMY_SP }),
-            "type"
-        )),
-        right: Box::new(js::Expr::This(js::ThisExpr { span: DUMMY_SP })),
-    });
-    
-    let switch_stmt = js::Stmt::Switch(js::SwitchStmt {
-        span: DUMMY_SP,
-        discriminant: Box::new(discriminant),
-        cases: switch_cases,
-    });
-    
-    let method_body = js::BlockStmt {
-        span: DUMMY_SP,
-        stmts: vec![switch_stmt],
-        ctxt: SyntaxContext::empty(),
-    };
-
-    Ok(js::ClassMethod {
-        span: DUMMY_SP,
-        key: js::PropName::Ident(state.mk_ident_name("toJSON")),
-        function: Box::new(js::Function {
-            params: vec![],
-            decorators: vec![],
-            span: DUMMY_SP,
-            body: Some(method_body),
-            is_generator: false,
-            is_async: false,
-            type_params: None,
-            return_type: None,
-            ctxt: SyntaxContext::empty(),
-        }),
-        kind: js::MethodKind::Method,
-        is_static: false,
-        accessibility: None,
-        is_abstract: false,
-        is_optional: false,
-        is_override: false,
-    })
-}
-
-// Helper function to create enum fromJSON function  
+// Helper function to create enum fromJSON function
 fn create_enum_from_json_function(
     input_enum: &ItemEnum,
     state: &mut TranspilerState,
@@ -6366,139 +6022,6 @@ fn create_enum_from_json_function(
     Ok(js::Function {
         params: vec![state.pat_to_param(js::Pat::Ident(js::BindingIdent {
             id: state.mk_ident("jsonString"),
-            type_ann: None,
-        }))],
-        decorators: vec![],
-        span: DUMMY_SP,
-        body: Some(method_body),
-        is_generator: false,
-        is_async: false,
-        type_params: None,
-        return_type: None,
-        ctxt: SyntaxContext::empty(),
-    })
-}
-
-// Helper function to create enum toJSON standalone function
-fn create_enum_to_json_standalone_function(
-    input_enum: &ItemEnum,
-    state: &mut TranspilerState,
-) -> Result<js::Function, String> {
-    // This function takes an enum instance and converts it to JSON
-    let mut switch_cases = Vec::new();
-    
-    for variant in &input_enum.variants {
-        let variant_name = variant.ident.to_string();
-        
-        match &variant.fields {
-            Fields::Unit => {
-                // Unit variants: return just the string
-                let return_stmt = state.mk_return_stmt(Some(state.mk_str_lit(&variant_name)));
-                switch_cases.push(js::SwitchCase {
-                    span: DUMMY_SP,
-                    test: Some(Box::new(state.mk_str_lit(&variant_name))),
-                    cons: vec![return_stmt],
-                });
-            }
-            Fields::Unnamed(fields) => {
-                // Tuple variants: return object with type and value0, value1, etc.
-                let mut props = vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
-                    js::KeyValueProp {
-                        key: js::PropName::Ident(state.mk_ident_name("type")),
-                        value: Box::new(state.mk_str_lit(&variant_name)),
-                    },
-                )))];
-                
-                for i in 0..fields.unnamed.len() {
-                    let field_name = format!("value{}", i);
-                    props.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
-                        js::KeyValueProp {
-                            key: js::PropName::Ident(state.mk_ident_name(&field_name)),
-                            value: Box::new(state.mk_member_expr(
-                                js::Expr::Ident(state.mk_ident("enumValue")),
-                                &field_name
-                            )),
-                        },
-                    ))));
-                }
-                
-                let obj = js::Expr::Object(js::ObjectLit {
-                    span: DUMMY_SP,
-                    props,
-                });
-                
-                let return_stmt = state.mk_return_stmt(Some(obj));
-                switch_cases.push(js::SwitchCase {
-                    span: DUMMY_SP,
-                    test: Some(Box::new(state.mk_str_lit(&variant_name))),
-                    cons: vec![return_stmt],
-                });
-            }
-            Fields::Named(fields) => {
-                // Struct variants: return object with type and named fields
-                let mut props = vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
-                    js::KeyValueProp {
-                        key: js::PropName::Ident(state.mk_ident_name("type")),
-                        value: Box::new(state.mk_str_lit(&variant_name)),
-                    },
-                )))];
-                
-                for field in &fields.named {
-                    if let Some(field_name) = &field.ident {
-                        let field_name_str = field_name.to_string();
-                        props.push(js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
-                            js::KeyValueProp {
-                                key: js::PropName::Ident(state.mk_ident_name(&field_name_str)),
-                                value: Box::new(state.mk_member_expr(
-                                    js::Expr::Ident(state.mk_ident("enumValue")),
-                                    &field_name_str
-                                )),
-                            },
-                        ))));
-                    }
-                }
-                
-                let obj = js::Expr::Object(js::ObjectLit {
-                    span: DUMMY_SP,
-                    props,
-                });
-                
-                let return_stmt = state.mk_return_stmt(Some(obj));
-                switch_cases.push(js::SwitchCase {
-                    span: DUMMY_SP,
-                    test: Some(Box::new(state.mk_str_lit(&variant_name))),
-                    cons: vec![return_stmt],
-                });
-            }
-        }
-    }
-    
-    // Create switch statement: switch(enumValue.type || enumValue) { ... }
-    let discriminant = js::Expr::Bin(js::BinExpr {
-        span: DUMMY_SP,
-        op: js::BinaryOp::LogicalOr,
-        left: Box::new(state.mk_member_expr(
-            js::Expr::Ident(state.mk_ident("enumValue")),
-            "type"
-        )),
-        right: Box::new(js::Expr::Ident(state.mk_ident("enumValue"))),
-    });
-    
-    let switch_stmt = js::Stmt::Switch(js::SwitchStmt {
-        span: DUMMY_SP,
-        discriminant: Box::new(discriminant),
-        cases: switch_cases,
-    });
-    
-    let method_body = js::BlockStmt {
-        span: DUMMY_SP,
-        stmts: vec![switch_stmt],
-        ctxt: SyntaxContext::empty(),
-    };
-
-    Ok(js::Function {
-        params: vec![state.pat_to_param(js::Pat::Ident(js::BindingIdent {
-            id: state.mk_ident("enumValue"),
             type_ann: None,
         }))],
         decorators: vec![],
