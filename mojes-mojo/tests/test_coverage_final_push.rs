@@ -67,6 +67,23 @@ fn test_match_tuple_with_ident_elements() {
 }
 
 #[test]
+#[ignore = "Wildcard inside tuple match patterns not yet supported — panics at lib.rs:5840"]
+fn test_match_tuple_with_wildcard_element() {
+    // Tests Pat::Wild inside tuple pattern — currently unsupported
+    let block: Block = parse_quote! {
+        {
+            let pair = (1, 2);
+            match pair {
+                (x, _) => x,
+            }
+        }
+    };
+    let js = rust_block_to_js(&block);
+    println!("JS tuple wildcard: {}", &js);
+    assert!(js.contains("[0]") || js.contains("_match_value"));
+}
+
+#[test]
 fn test_match_enum_variant_with_wildcard_field() {
     // Tests wildcard in enum tuple variant: Message::Data(_, y)
     let block: Block = parse_quote! {
