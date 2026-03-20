@@ -2957,6 +2957,38 @@ fn handle_method_call(
             // .unwrap() is just the value itself in JavaScript
             Ok(receiver)
         }
+        "unwrap_or" => {
+            // .unwrap_or(default) -> receiver ?? default
+            if js_args.len() == 1 {
+                Ok(state.mk_binary_expr(
+                    receiver,
+                    js::BinaryOp::NullishCoalescing,
+                    js_args.into_iter().next().unwrap(),
+                ))
+            } else {
+                Err("unwrap_or expects exactly one argument".to_string())
+            }
+        }
+        "unwrap_or_else" => {
+            // .unwrap_or_else(|| default) -> receiver ?? closure()
+            if js_args.len() == 1 {
+                Ok(state.mk_binary_expr(
+                    receiver,
+                    js::BinaryOp::NullishCoalescing,
+                    state.mk_call_expr(js_args.into_iter().next().unwrap(), vec![]),
+                ))
+            } else {
+                Err("unwrap_or_else expects exactly one argument".to_string())
+            }
+        }
+        "unwrap_or_default" => {
+            // .unwrap_or_default() -> receiver ?? null
+            Ok(state.mk_binary_expr(
+                receiver,
+                js::BinaryOp::NullishCoalescing,
+                state.mk_null_lit(),
+            ))
+        }
         _ => {
             // Default method call
             Ok(state.mk_call_expr(state.mk_member_expr(receiver, &method_name), js_args))
@@ -3238,6 +3270,151 @@ fn handle_macro_expr(mac: &syn::Macro, state: &mut TranspilerState) -> Result<js
                     elems: js_elements,
                 }))
             }
+        }
+        "panic" => {
+            // panic!("msg") → (function() { throw new Error("msg"); }).call(this)
+            // panic!("msg {}", arg) → (function() { throw new Error(`msg ${arg}`); }).call(this)
+            let error_msg = if tokens.trim().is_empty() {
+                state.mk_str_lit("explicit panic")
+            } else if contains_format_arguments(&tokens) {
+                handle_format_like_macro(&tokens, state)?
+            } else {
+                parse_macro_tokens(&tokens, state)?
+            };
+            let new_error = js::Expr::New(js::NewExpr {
+                span: DUMMY_SP,
+                callee: Box::new(js::Expr::Ident(state.mk_ident("Error"))),
+                args: Some(vec![js::ExprOrSpread {
+                    spread: None,
+                    expr: Box::new(error_msg),
+                }]),
+                type_args: None,
+                ctxt: SyntaxContext::empty(),
+            });
+            let throw_stmt = js::Stmt::Throw(js::ThrowStmt {
+                span: DUMMY_SP,
+                arg: Box::new(new_error),
+            });
+            Ok(state.mk_iife(vec![throw_stmt]))
+        }
+        "todo" => {
+            // todo!() → (function() { throw new Error("not yet implemented"); }).call(this)
+            // todo!("msg") → (function() { throw new Error("msg"); }).call(this)
+            let error_msg = if tokens.trim().is_empty() {
+                state.mk_str_lit("not yet implemented")
+            } else if contains_format_arguments(&tokens) {
+                handle_format_like_macro(&tokens, state)?
+            } else {
+                parse_macro_tokens(&tokens, state)?
+            };
+            let new_error = js::Expr::New(js::NewExpr {
+                span: DUMMY_SP,
+                callee: Box::new(js::Expr::Ident(state.mk_ident("Error"))),
+                args: Some(vec![js::ExprOrSpread {
+                    spread: None,
+                    expr: Box::new(error_msg),
+                }]),
+                type_args: None,
+                ctxt: SyntaxContext::empty(),
+            });
+            let throw_stmt = js::Stmt::Throw(js::ThrowStmt {
+                span: DUMMY_SP,
+                arg: Box::new(new_error),
+            });
+            Ok(state.mk_iife(vec![throw_stmt]))
+        }
+        "assert" => {
+            // assert!(condition) → IIFE: if (!condition) { throw new Error("assertion failed: condition") }
+            // assert!(condition, "msg") → IIFE: if (!condition) { throw new Error("msg") }
+            let parts = smart_comma_split(&tokens);
+            if parts.is_empty() {
+                return Err("assert! requires at least one argument".to_string());
+            }
+
+            let condition_str = parts[0].trim();
+            let condition_expr = parse_macro_tokens(condition_str, state)?;
+
+            let error_msg = if parts.len() > 1 {
+                // Custom message provided
+                let msg_tokens = parts[1..].join(", ");
+                let msg_trimmed = msg_tokens.trim();
+                if contains_format_arguments(msg_trimmed) {
+                    handle_format_like_macro(msg_trimmed, state)?
+                } else {
+                    parse_macro_tokens(msg_trimmed, state)?
+                }
+            } else {
+                state.mk_str_lit(&format!("assertion failed: {}", condition_str))
+            };
+
+            let new_error = js::Expr::New(js::NewExpr {
+                span: DUMMY_SP,
+                callee: Box::new(js::Expr::Ident(state.mk_ident("Error"))),
+                args: Some(vec![js::ExprOrSpread {
+                    spread: None,
+                    expr: Box::new(error_msg),
+                }]),
+                type_args: None,
+                ctxt: SyntaxContext::empty(),
+            });
+            let throw_stmt = js::Stmt::Throw(js::ThrowStmt {
+                span: DUMMY_SP,
+                arg: Box::new(new_error),
+            });
+            let throw_block = js::Stmt::Block(js::BlockStmt {
+                span: DUMMY_SP,
+                stmts: vec![throw_stmt],
+                ctxt: SyntaxContext::empty(),
+            });
+
+            // if (!condition) { throw new Error(...) }
+            let negated_condition = js::Expr::Unary(js::UnaryExpr {
+                span: DUMMY_SP,
+                op: js::UnaryOp::Bang,
+                arg: Box::new(js::Expr::Paren(js::ParenExpr {
+                    span: DUMMY_SP,
+                    expr: Box::new(condition_expr),
+                })),
+            });
+
+            let if_stmt = js::Stmt::If(js::IfStmt {
+                span: DUMMY_SP,
+                test: Box::new(negated_condition),
+                cons: Box::new(throw_block),
+                alt: None,
+            });
+
+            Ok(state.mk_iife(vec![if_stmt]))
+        }
+        "dbg" => {
+            // dbg!(expr) → (console.log("expr =", expr), expr)
+            let trimmed = tokens.trim();
+            if trimmed.is_empty() {
+                // dbg!() with no args - just log empty
+                let console_log = state.mk_member_expr(
+                    js::Expr::Ident(state.mk_ident("console")),
+                    "log",
+                );
+                return Ok(state.mk_call_expr(console_log, vec![]));
+            }
+
+            let expr = parse_macro_tokens(trimmed, state)?;
+            let label = format!("{} =", trimmed);
+
+            let console_log = state.mk_member_expr(
+                js::Expr::Ident(state.mk_ident("console")),
+                "log",
+            );
+            let log_call = state.mk_call_expr(
+                console_log,
+                vec![state.mk_str_lit(&label), expr.clone()],
+            );
+
+            // Use comma operator: (console.log("expr =", expr), expr)
+            Ok(js::Expr::Seq(js::SeqExpr {
+                span: DUMMY_SP,
+                exprs: vec![Box::new(log_call), Box::new(expr)],
+            }))
         }
         _ => panic!("Unsupported macro: {}", macro_name),
     }
@@ -5333,6 +5510,24 @@ fn handle_pattern_binding(
                             }
                         }
                     }
+                    Pat::Wild(_) => {
+                        // Wildcard - no binding needed, always matches
+                        conditions.push(state.mk_bool_lit(true));
+                    }
+                    Pat::Lit(lit_pat) => {
+                        let lit_expr = match &lit_pat.lit {
+                            syn::Lit::Int(i) => state.mk_num_lit(i.base10_parse::<f64>().unwrap()),
+                            syn::Lit::Str(s) => state.mk_str_lit(&s.value()),
+                            syn::Lit::Bool(b) => state.mk_bool_lit(b.value()),
+                            syn::Lit::Char(c) => state.mk_str_lit(&c.value().to_string()),
+                            _ => panic!("Unsupported literal in tuple pattern"),
+                        };
+                        conditions.push(state.mk_binary_expr(
+                            array_access_expr,
+                            js::BinaryOp::EqEqEq,
+                            lit_expr,
+                        ));
+                    }
                     _ => {
                         return Err(format!("Unsupported pattern in tuple: {:?}", elem_pat));
                     }
@@ -5345,6 +5540,26 @@ fn handle_pattern_binding(
             } else {
                 conditions.into_iter().reduce(|acc, cond| {
                     state.mk_binary_expr(acc, js::BinaryOp::LogicalAnd, cond)
+                }).unwrap()
+            }
+        }
+        Pat::Or(or_pat) => {
+            // Handle or-patterns: 1 | 2 | 3
+            // Generate: condition1 || condition2 || condition3
+            let mut or_conditions = Vec::new();
+            for pat in &or_pat.cases {
+                let (sub_condition, sub_bindings) = handle_pattern_binding(pat, match_var, state)?;
+                // Or-patterns shouldn't have bindings (they're typically literals/paths)
+                // but extend binding_stmts just in case
+                binding_stmts.extend(sub_bindings);
+                or_conditions.push(sub_condition);
+            }
+
+            if or_conditions.is_empty() {
+                state.mk_bool_lit(true)
+            } else {
+                or_conditions.into_iter().reduce(|acc, cond| {
+                    state.mk_binary_expr(acc, js::BinaryOp::LogicalOr, cond)
                 }).unwrap()
             }
         }
