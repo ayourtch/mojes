@@ -31,7 +31,6 @@ fn test_while_true_loop() {
 }
 
 #[test]
-#[ignore = "while true loop with break loses the loop body — only variable declarations are emitted"]
 fn test_while_true_loop_generates_while() {
     let block: Block = parse_quote! {
         {

@@ -63,8 +63,7 @@ fn test_break_with_value() {
 }
 
 #[test]
-#[ignore = "break in expression context generates undefined instead of break statement"]
-fn test_break_without_value_generates_break() {
+fn test_break_without_value() {
     // Tests Expr::Break without value — should generate a JS `break` statement
     let block: Block = parse_quote! {
         {
@@ -74,35 +73,75 @@ fn test_break_without_value_generates_break() {
         }
     };
     let js = rust_block_to_js(&block);
-    println!("JS break no val: {}", &js);
+    println!("JS break: {}", &js);
     assert!(js.contains("break"));
 }
 
 #[test]
-fn test_break_without_value() {
-    // Tests that break without value currently transpiles (even if imperfectly)
+fn test_continue_in_loop() {
+    // Tests that continue generates a proper JS continue statement
     let block: Block = parse_quote! {
         {
-            loop {
-                break;
+            let items = vec![1, 2, 3];
+            for item in items {
+                if item == 2 {
+                    continue;
+                }
+                item;
             }
         }
     };
     let js = rust_block_to_js(&block);
-    println!("JS break no val: {}", &js);
-    // Currently generates undefined, but the code at least doesn't panic
+    println!("JS continue: {}", &js);
+    assert!(js.contains("continue"));
 }
 
 #[test]
-#[ignore = "continue transpiles to undefined instead of actual continue statement — see JS_COVERAGE_REPORT.md"]
-fn test_continue_expression() {
-    // Tests Expr::Continue — should generate a JS `continue` statement
-    let expr: Expr = parse_quote! {
-        continue
+fn test_break_in_while_loop_executes() {
+    // Verify that break in while loop generates correct, executable JS
+    let block: Block = parse_quote! {
+        {
+            let mut count = 0;
+            while true {
+                count = count + 1;
+                if count >= 3 {
+                    break;
+                }
+            }
+            count
+        }
     };
-    let js = rust_expr_to_js(&expr);
-    println!("JS continue: {}", &js);
+    let js = rust_block_to_js(&block);
+    println!("JS break while: {}", &js);
+    assert!(js.contains("break"));
+    let code = format!("(function() {{ {} }})()", &js);
+    let result = eval_js(&code).unwrap();
+    assert_eq!(result.as_number().unwrap(), 3.0);
+}
+
+#[test]
+fn test_continue_in_for_loop_executes() {
+    // Verify that continue in for loop generates correct, executable JS
+    let block: Block = parse_quote! {
+        {
+            let items = vec![1, 2, 3, 4, 5];
+            let mut sum = 0;
+            for item in items {
+                if item == 3 {
+                    continue;
+                }
+                sum = sum + item;
+            }
+            sum
+        }
+    };
+    let js = rust_block_to_js(&block);
+    println!("JS continue for: {}", &js);
     assert!(js.contains("continue"));
+    let code = format!("(function() {{ {} }})()", &js);
+    let result = eval_js(&code).unwrap();
+    // 1 + 2 + 4 + 5 = 12 (skipping 3)
+    assert_eq!(result.as_number().unwrap(), 12.0);
 }
 
 #[test]

@@ -1196,6 +1196,25 @@ pub fn rust_block_to_js_with_params_and_state(
                         debug_print!("DEBUG IFIN BLOCK: {:?}", if_stmt);
                         js_stmts.push(if_stmt);
                     }
+                    Expr::Break(break_expr) => {
+                        // Generate break statement directly
+                        if let Some(value) = &break_expr.expr {
+                            // break with value — emit the value and then break
+                            let value_js = rust_expr_to_js_with_state(value, state)?;
+                            js_stmts.push(state.mk_expr_stmt(value_js));
+                        }
+                        js_stmts.push(js::Stmt::Break(js::BreakStmt {
+                            span: DUMMY_SP,
+                            label: None,
+                        }));
+                    }
+                    Expr::Continue(_) => {
+                        // Generate continue statement directly
+                        js_stmts.push(js::Stmt::Continue(js::ContinueStmt {
+                            span: DUMMY_SP,
+                            label: None,
+                        }));
+                    }
                     x => {
                         debug_print!(
                             "DEBUG EXPR IN BLOCK (block action: {:?}) : {:?}, semi: {:?}",
@@ -1312,6 +1331,24 @@ pub fn rust_block_to_js_with_params_and_retval(
                         };
                         debug_print!("DEBUG IFIN BLOCK: {:?}", if_stmt);
                         js_stmts.push(if_stmt);
+                    }
+                    Expr::Break(break_expr) => {
+                        // Generate break statement directly
+                        if let Some(value) = &break_expr.expr {
+                            let value_js = rust_expr_to_js_with_state(value, state)?;
+                            js_stmts.push(state.mk_expr_stmt(value_js));
+                        }
+                        js_stmts.push(js::Stmt::Break(js::BreakStmt {
+                            span: DUMMY_SP,
+                            label: None,
+                        }));
+                    }
+                    Expr::Continue(_) => {
+                        // Generate continue statement directly
+                        js_stmts.push(js::Stmt::Continue(js::ContinueStmt {
+                            span: DUMMY_SP,
+                            label: None,
+                        }));
                     }
                     x => {
                         debug_print!(
