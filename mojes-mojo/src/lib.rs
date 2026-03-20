@@ -17,6 +17,96 @@ macro_rules! debug_print {
     };
 }
 
+/// Check if any statement in a list contains an `await` expression.
+/// Recursively walks the JavaScript AST to find `Expr::Await` nodes.
+fn stmts_contain_await(stmts: &[js::Stmt]) -> bool {
+    stmts.iter().any(stmt_contains_await)
+}
+
+fn stmt_contains_await(stmt: &js::Stmt) -> bool {
+    match stmt {
+        js::Stmt::Expr(expr_stmt) => expr_contains_await(&expr_stmt.expr),
+        js::Stmt::Return(ret) => ret.arg.as_ref().map_or(false, |e| expr_contains_await(e)),
+        js::Stmt::Decl(decl) => decl_contains_await(decl),
+        js::Stmt::If(if_stmt) => {
+            expr_contains_await(&if_stmt.test)
+                || stmt_contains_await(&if_stmt.cons)
+                || if_stmt.alt.as_ref().map_or(false, |s| stmt_contains_await(s))
+        }
+        js::Stmt::Block(block) => stmts_contain_await(&block.stmts),
+        js::Stmt::For(f) => stmt_contains_await(&f.body),
+        js::Stmt::ForIn(f) => stmt_contains_await(&f.body),
+        js::Stmt::ForOf(f) => expr_contains_await(&f.right) || stmt_contains_await(&f.body),
+        js::Stmt::While(w) => expr_contains_await(&w.test) || stmt_contains_await(&w.body),
+        js::Stmt::Switch(s) => {
+            expr_contains_await(&s.discriminant)
+                || s.cases.iter().any(|c| stmts_contain_await(&c.cons))
+        }
+        js::Stmt::Throw(t) => expr_contains_await(&t.arg),
+        js::Stmt::Try(t) => {
+            stmts_contain_await(&t.block.stmts)
+                || t.handler.as_ref().map_or(false, |h| stmts_contain_await(&h.body.stmts))
+                || t.finalizer.as_ref().map_or(false, |f| stmts_contain_await(&f.stmts))
+        }
+        _ => false,
+    }
+}
+
+fn decl_contains_await(decl: &js::Decl) -> bool {
+    match decl {
+        js::Decl::Var(var) => var.decls.iter().any(|d| {
+            d.init.as_ref().map_or(false, |e| expr_contains_await(e))
+        }),
+        _ => false,
+    }
+}
+
+fn expr_contains_await(expr: &js::Expr) -> bool {
+    match expr {
+        js::Expr::Await(_) => true,
+        js::Expr::Call(c) => {
+            callee_contains_await(&c.callee) || c.args.iter().any(|a| expr_contains_await(&a.expr))
+        }
+        js::Expr::Member(m) => expr_contains_await(&m.obj),
+        js::Expr::Bin(b) => expr_contains_await(&b.left) || expr_contains_await(&b.right),
+        js::Expr::Unary(u) => expr_contains_await(&u.arg),
+        js::Expr::Assign(a) => expr_contains_await(&a.right),
+        js::Expr::Paren(p) => expr_contains_await(&p.expr),
+        js::Expr::Seq(s) => s.exprs.iter().any(|e| expr_contains_await(e)),
+        js::Expr::Cond(c) => {
+            expr_contains_await(&c.test)
+                || expr_contains_await(&c.cons)
+                || expr_contains_await(&c.alt)
+        }
+        js::Expr::Array(a) => a.elems.iter().any(|e| {
+            e.as_ref().map_or(false, |e| expr_contains_await(&e.expr))
+        }),
+        js::Expr::Object(o) => o.props.iter().any(|p| match p {
+            js::PropOrSpread::Prop(p) => match p.as_ref() {
+                js::Prop::KeyValue(kv) => expr_contains_await(&kv.value),
+                _ => false,
+            },
+            js::PropOrSpread::Spread(s) => expr_contains_await(&s.expr),
+        }),
+        js::Expr::Arrow(a) => match &*a.body {
+            js::BlockStmtOrExpr::BlockStmt(b) => stmts_contain_await(&b.stmts),
+            js::BlockStmtOrExpr::Expr(e) => expr_contains_await(e),
+        },
+        js::Expr::Tpl(t) => t.exprs.iter().any(|e| expr_contains_await(e)),
+        js::Expr::New(n) => n.args.as_ref().map_or(false, |args| {
+            args.iter().any(|a| expr_contains_await(&a.expr))
+        }),
+        _ => false,
+    }
+}
+
+fn callee_contains_await(callee: &js::Callee) -> bool {
+    match callee {
+        js::Callee::Expr(e) => expr_contains_await(e),
+        _ => false,
+    }
+}
+
 /// Transpiler state for managing context and symbols during translation
 pub struct TranspilerState {
     /// Symbol table for variable name mapping and type tracking
@@ -286,6 +376,9 @@ impl TranspilerState {
     }
 
     pub fn mk_iife_with_this_context(&self, stmts: Vec<js::Stmt>) -> js::Expr {
+        // Detect if any statement contains an await expression
+        let is_async = stmts_contain_await(&stmts);
+
         let body = js::BlockStmt {
             span: DUMMY_SP,
             stmts,
@@ -299,7 +392,7 @@ impl TranspilerState {
             span: DUMMY_SP,
             body: Some(body),
             is_generator: false,
-            is_async: false,
+            is_async,
             type_params: None,
             return_type: None,
             ctxt: SyntaxContext::empty(),
@@ -2010,43 +2103,122 @@ pub fn rust_expr_to_js_with_action_and_state(
         }
 
         Expr::Try(try_expr) => {
-            let inner = rust_expr_to_js_with_action_and_state(block_action, &try_expr.expr, state)?;
-            // Generate an IIFE that handles the try operation
-            let temp_var = state.generate_temp_var();
+            // Check if inner expression is an await — if so, generate try/catch
+            if matches!(*try_expr.expr, Expr::Await(_)) {
+                // For expr.await?, generate an async IIFE with try/catch:
+                // (async function() { try { return await expr; } catch(e) { return { error: e }; } }).call(this)
+                let inner = rust_expr_to_js_with_action_and_state(block_action, &try_expr.expr, state)?;
 
-            let stmts = vec![
-                // const _temp1 = some_function();
-                state.mk_var_decl(&temp_var, Some(inner), true),
-                // if (_temp1 && _temp1.error) return _temp1;
-                js::Stmt::If(js::IfStmt {
+                let error_ident = state.mk_ident("e");
+
+                // Build: { error: e }
+                let error_obj = js::Expr::Object(js::ObjectLit {
                     span: DUMMY_SP,
-                    test: Box::new(state.mk_binary_expr(
-                        js::Expr::Ident(state.mk_ident(&temp_var)),
-                        js::BinaryOp::LogicalAnd,
-                        js::Expr::Member(js::MemberExpr {
+                    props: vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+                        js::KeyValueProp {
+                            key: js::PropName::Ident(state.mk_ident_name("error")),
+                            value: Box::new(js::Expr::Ident(error_ident.clone())),
+                        },
+                    )))],
+                });
+
+                // try { return await expr; } catch(e) { return { error: e }; }
+                let try_stmt = js::Stmt::Try(Box::new(js::TryStmt {
+                    span: DUMMY_SP,
+                    block: js::BlockStmt {
+                        span: DUMMY_SP,
+                        stmts: vec![js::Stmt::Return(js::ReturnStmt {
+                            span: DUMMY_SP,
+                            arg: Some(Box::new(inner)),
+                        })],
+                        ctxt: SyntaxContext::empty(),
+                    },
+                    handler: Some(js::CatchClause {
+                        span: DUMMY_SP,
+                        param: Some(js::Pat::Ident(js::BindingIdent {
+                            id: error_ident,
+                            type_ann: None,
+                        })),
+                        body: js::BlockStmt {
+                            span: DUMMY_SP,
+                            stmts: vec![js::Stmt::Return(js::ReturnStmt {
+                                span: DUMMY_SP,
+                                arg: Some(Box::new(error_obj)),
+                            })],
+                            ctxt: SyntaxContext::empty(),
+                        },
+                    }),
+                    finalizer: None,
+                }));
+
+                // Wrap in an async IIFE
+                let body = js::BlockStmt {
+                    span: DUMMY_SP,
+                    stmts: vec![try_stmt],
+                    ctxt: SyntaxContext::empty(),
+                };
+
+                let function = js::Function {
+                    params: vec![],
+                    decorators: vec![],
+                    span: DUMMY_SP,
+                    body: Some(body),
+                    is_generator: false,
+                    is_async: true,
+                    type_params: None,
+                    return_type: None,
+                    ctxt: SyntaxContext::empty(),
+                };
+
+                let wrapped_fn = js::Expr::Paren(js::ParenExpr {
+                    span: DUMMY_SP,
+                    expr: Box::new(js::Expr::Fn(js::FnExpr {
+                        ident: None,
+                        function: Box::new(function),
+                    })),
+                });
+
+                let call_expr = state.mk_member_expr(wrapped_fn, "call");
+                Ok(state.mk_call_expr(call_expr, vec![state.mk_this_expr()]))
+            } else {
+                let inner = rust_expr_to_js_with_action_and_state(block_action, &try_expr.expr, state)?;
+                // Generate an IIFE that handles the try operation
+                let temp_var = state.generate_temp_var();
+
+                let stmts = vec![
+                    // const _temp1 = some_function();
+                    state.mk_var_decl(&temp_var, Some(inner), true),
+                    // if (_temp1 && _temp1.error) return _temp1;
+                    js::Stmt::If(js::IfStmt {
+                        span: DUMMY_SP,
+                        test: Box::new(state.mk_binary_expr(
+                            js::Expr::Ident(state.mk_ident(&temp_var)),
+                            js::BinaryOp::LogicalAnd,
+                            js::Expr::Member(js::MemberExpr {
+                                span: DUMMY_SP,
+                                obj: Box::new(js::Expr::Ident(state.mk_ident(&temp_var))),
+                                prop: js::MemberProp::Ident(state.mk_ident_name("error")),
+                            }),
+                        )),
+                        cons: Box::new(js::Stmt::Return(js::ReturnStmt {
+                            span: DUMMY_SP,
+                            arg: Some(Box::new(js::Expr::Ident(state.mk_ident(&temp_var)))),
+                        })),
+                        alt: None,
+                    }),
+                    // return _temp1.ok;  (unwrap the success value)
+                    js::Stmt::Return(js::ReturnStmt {
+                        span: DUMMY_SP,
+                        arg: Some(Box::new(js::Expr::Member(js::MemberExpr {
                             span: DUMMY_SP,
                             obj: Box::new(js::Expr::Ident(state.mk_ident(&temp_var))),
-                            prop: js::MemberProp::Ident(state.mk_ident_name("error")),
-                        }),
-                    )),
-                    cons: Box::new(js::Stmt::Return(js::ReturnStmt {
-                        span: DUMMY_SP,
-                        arg: Some(Box::new(js::Expr::Ident(state.mk_ident(&temp_var)))),
-                    })),
-                    alt: None,
-                }),
-                // return _temp1.ok;  (unwrap the success value)
-                js::Stmt::Return(js::ReturnStmt {
-                    span: DUMMY_SP,
-                    arg: Some(Box::new(js::Expr::Member(js::MemberExpr {
-                        span: DUMMY_SP,
-                        obj: Box::new(js::Expr::Ident(state.mk_ident(&temp_var))),
-                        prop: js::MemberProp::Ident(state.mk_ident_name("ok")),
-                    }))),
-                }),
-            ];
+                            prop: js::MemberProp::Ident(state.mk_ident_name("ok")),
+                        }))),
+                    }),
+                ];
 
-            Ok(state.mk_iife(stmts))
+                Ok(state.mk_iife(stmts))
+            }
         }
         _ => {
             state.add_warning(format!("Unsupported expression type: {:?}", expr));
@@ -2864,8 +3036,13 @@ fn handle_function_call(
                 }
 
                 // Handle other static methods (Type::method)
+                // Convert snake_case method names to camelCase for JavaScript
+                let js_method_name = match method_name.as_str() {
+                    "all_settled" => "allSettled".to_string(),
+                    other => other.to_string(),
+                };
                 let static_method =
-                    state.mk_member_expr(js::Expr::Ident(state.mk_ident(&type_name)), &method_name);
+                    state.mk_member_expr(js::Expr::Ident(state.mk_ident(&type_name)), &js_method_name);
                 return Ok(state.mk_call_expr(static_method, js_args));
             }
 

@@ -67,6 +67,34 @@ impl<T> Promise<T> {
         // In JavaScript, this would be: promise.catch(callback)
         Promise::new()
     }
+
+    pub fn finally<F>(&self, callback: F) -> Promise<T>
+    where
+        F: FnOnce(),
+    {
+        println!("Promise.finally() called");
+        Promise::new()
+    }
+
+    pub fn all(promises: Vec<Promise<T>>) -> Promise<Vec<T>> {
+        println!("Promise.all() called");
+        Promise::new()
+    }
+
+    pub fn race(promises: Vec<Promise<T>>) -> Promise<T> {
+        println!("Promise.race() called");
+        Promise::new()
+    }
+
+    pub fn any(promises: Vec<Promise<T>>) -> Promise<T> {
+        println!("Promise.any() called");
+        Promise::new()
+    }
+
+    pub fn all_settled(promises: Vec<Promise<T>>) -> Promise<Vec<T>> {
+        println!("Promise.allSettled() called");
+        Promise::new()
+    }
 }
 
 #[linkme::distributed_slice]
