@@ -259,7 +259,8 @@ pub fn to_js(_attr: TokenStream, item: TokenStream) -> TokenStream {
     js_body.push_str(&rust_block_to_js(&input_fn.block));
 
     // Create the JavaScript function string
-    let js_function = format!("function {}({}) {{\n{}}}", js_fn_name, js_args, js_body);
+    let async_prefix = if input_fn.sig.asyncness.is_some() { "async " } else { "" };
+    let js_function = format!("{}function {}({}) {{\n{}}}", async_prefix, js_fn_name, js_args, js_body);
 
     // Create a string constant with the JavaScript function
     let js_const_name = format_ident!("{}_JS", fn_name.to_string().to_uppercase());
