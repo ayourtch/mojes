@@ -1962,12 +1962,14 @@ mod tests_xhr {
 #[derive(Clone, Debug)]
 pub struct WebSocket {
     pub url: String,
+    pub readyState: i32,
+    pub bufferedAmount: i32,
 }
 
 impl WebSocket {
     pub fn new(url: &str) -> Result<Self, String> {
         // Mock implementation for transpilation
-        Ok(Self { url: url.to_string() })
+        Ok(Self { url: url.to_string(), readyState: 0, bufferedAmount: 0 })
     }
 
     pub fn send(&self, data: &str) {
@@ -2330,9 +2332,9 @@ impl MediaDevices {
         Promise::new()
     }
 
-    pub fn getDisplayMedia(&self, constraints: &MediaStreamConstraints) -> Result<MediaStream, String> {
+    pub fn getDisplayMedia(&self, constraints: &MediaStreamConstraints) -> Promise<MediaStream> {
         println!("MediaDevices.getDisplayMedia()");
-        Ok(MediaStream::new())
+        Promise::new()
     }
 
     pub fn enumerateDevices(&self) -> Result<Vec<MediaDeviceInfo>, String> {
@@ -2659,6 +2661,33 @@ impl RTCPeerConnection {
         Vec::new()
     }
 
+    pub fn getReceivers(&self) -> Vec<RTCRtpReceiver> {
+        println!("RTCPeerConnection.getReceivers()");
+        Vec::new()
+    }
+
+    pub fn getTransceivers(&self) -> Vec<RTCRtpTransceiver> {
+        println!("RTCPeerConnection.getTransceivers()");
+        Vec::new()
+    }
+
+    pub fn addTransceiver(&self, track_or_kind: &str) -> RTCRtpTransceiver {
+        println!("RTCPeerConnection.addTransceiver({})", track_or_kind);
+        RTCRtpTransceiver::new(
+            RTCRtpSender::new(None),
+            RTCRtpReceiver::new(MediaStreamTrack::new("")),
+        )
+    }
+
+    pub fn getStats(&self) -> Promise<RTCStatsReport> {
+        println!("RTCPeerConnection.getStats()");
+        Promise::new()
+    }
+
+    pub fn restartIce(&self) {
+        println!("RTCPeerConnection.restartIce()");
+    }
+
     // Data channel methods
     pub fn createDataChannel(&self, label: &str) -> RTCDataChannel {
         println!("RTCPeerConnection.createDataChannel({})", label);
@@ -2681,5 +2710,149 @@ impl RTCPeerConnection {
         self.iceConnectionState = "closed".to_string();
         self.signalingState = "closed".to_string();
         self.iceGatheringState = "complete".to_string();
+    }
+}
+
+// ============================================================================
+// Fetch API
+// ============================================================================
+
+/// Headers interface for the Fetch API
+// #[js_type] - Browser built-in, do not export
+#[derive(Clone, Debug)]
+pub struct Headers {
+    entries: HashMap<String, String>,
+}
+
+impl Headers {
+    pub fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+        }
+    }
+
+    pub fn append(&mut self, name: &str, value: &str) {
+        println!("Headers.append({}, {})", name, value);
+        // In the real API, append adds to existing values; mock just sets
+        self.entries.insert(name.to_lowercase(), value.to_string());
+    }
+
+    pub fn get(&self, name: &str) -> Option<String> {
+        println!("Headers.get({})", name);
+        self.entries.get(&name.to_lowercase()).cloned()
+    }
+
+    pub fn set(&mut self, name: &str, value: &str) {
+        println!("Headers.set({}, {})", name, value);
+        self.entries.insert(name.to_lowercase(), value.to_string());
+    }
+
+    pub fn delete(&mut self, name: &str) {
+        println!("Headers.delete({})", name);
+        self.entries.remove(&name.to_lowercase());
+    }
+
+    pub fn has(&self, name: &str) -> bool {
+        println!("Headers.has({})", name);
+        self.entries.contains_key(&name.to_lowercase())
+    }
+}
+
+/// Response interface for the Fetch API
+// #[js_type] - Browser built-in, do not export
+#[derive(Clone, Debug)]
+pub struct Response {
+    pub ok: bool,
+    pub status: u16,
+    pub statusText: String,
+    pub headers: Headers,
+}
+
+impl Response {
+    pub fn new() -> Self {
+        Self {
+            ok: true,
+            status: 200,
+            statusText: "OK".to_string(),
+            headers: Headers::new(),
+        }
+    }
+
+    pub fn json(&self) -> Promise<String> {
+        println!("Response.json()");
+        Promise::new()
+    }
+
+    pub fn text(&self) -> Promise<String> {
+        println!("Response.text()");
+        Promise::new()
+    }
+
+    pub fn blob(&self) -> Promise<String> {
+        println!("Response.blob()");
+        Promise::new()
+    }
+}
+
+/// Request interface for the Fetch API
+// #[js_type] - Browser built-in, do not export
+#[derive(Clone, Debug)]
+pub struct Request {
+    pub url: String,
+    pub method: String,
+    pub headers: Headers,
+}
+
+impl Request {
+    pub fn new(url: &str) -> Self {
+        println!("new Request({})", url);
+        Self {
+            url: url.to_string(),
+            method: "GET".to_string(),
+            headers: Headers::new(),
+        }
+    }
+}
+
+/// Global fetch function
+pub fn fetch(url: &str) -> Promise<Response> {
+    println!("fetch({})", url);
+    Promise::new()
+}
+
+/// AbortSignal interface for the Fetch API
+// #[js_type] - Browser built-in, do not export
+#[derive(Clone, Debug)]
+pub struct AbortSignal {
+    pub aborted: bool,
+}
+
+impl AbortSignal {
+    pub fn new() -> Self {
+        Self {
+            aborted: false,
+        }
+    }
+}
+
+/// AbortController interface for the Fetch API
+// #[js_type] - Browser built-in, do not export
+#[derive(Clone, Debug)]
+pub struct AbortController {
+    pub signal: AbortSignal,
+}
+
+impl AbortController {
+    pub fn new() -> Self {
+        println!("new AbortController()");
+        Self {
+            signal: AbortSignal::new(),
+        }
+    }
+
+    pub fn abort(&self) {
+        println!("AbortController.abort()");
+        // In a real implementation, this would set signal.aborted = true
+        // and dispatch an abort event
     }
 }
