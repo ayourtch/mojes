@@ -97,6 +97,42 @@ impl<T> Promise<T> {
     }
 }
 
+/// Allow `.await` on Promise values in Rust code destined for transpilation.
+///
+/// The mock never resolves (it returns `Poll::Pending` forever) — it exists so
+/// that `some_promise.await` type-checks in Rust with the awaited value having
+/// type `T`. In the transpiled JavaScript this becomes a native `await`.
+impl<T> std::future::Future for Promise<T> {
+    type Output = T;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<T> {
+        // Mock: pends forever. Browser JS engines resolve the real promise.
+        std::task::Poll::Pending
+    }
+}
+
+/// Mock of the JavaScript global `JSON` object.
+///
+/// `JSON.stringify(&value)` / `let v: T = JSON.parse(&text)` in Rust transpile
+/// to the native `JSON.stringify(value)` / `JSON.parse(text)` calls.
+pub struct JSONGlobal;
+
+impl JSONGlobal {
+    pub fn stringify<T: serde::Serialize>(&self, value: &T) -> String {
+        serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
+    }
+
+    pub fn parse<T: serde::de::DeserializeOwned>(&self, text: &str) -> T {
+        serde_json::from_str(text).expect("JSON.parse: invalid JSON")
+    }
+}
+
+#[allow(non_upper_case_globals)]
+pub static JSON: JSONGlobal = JSONGlobal;
+
 #[linkme::distributed_slice]
 pub static JS: [&str];
 
@@ -266,6 +302,8 @@ pub struct Element {
     pub outerHTML: String,
     pub textContent: String,
     pub value: String,
+    /// Media source for <video>/<audio> elements (WebRTC): element.srcObject = stream
+    pub srcObject: Option<MediaStream>,
 }
 
 impl Element {
@@ -281,6 +319,7 @@ impl Element {
             outerHTML: String::new(),
             textContent: String::new(),
             value: String::new(),
+            srcObject: None,
         }
     }
 
@@ -296,6 +335,7 @@ impl Element {
             outerHTML: String::new(),
             textContent: String::new(),
             value: String::new(),
+            srcObject: None,
         }
     }
     
@@ -327,7 +367,10 @@ impl Element {
         false
     }
 
-    pub fn addEventListener(&self, _event_type: &str, _callback: fn(_event: Event)) {
+    pub fn addEventListener<F>(&self, _event_type: &str, _callback: F)
+    where
+        F: Fn(Event) + 'static,
+    {
         // Mock implementation for transpilation
     }
 
@@ -336,6 +379,11 @@ impl Element {
     }
 
     pub fn appendChild(&mut self, _child: Element) {
+        // Mock implementation for transpilation
+    }
+
+    /// Removes the element from the DOM tree it belongs to (JS: element.remove())
+    pub fn remove(&mut self) {
         // Mock implementation for transpilation
     }
 
@@ -745,7 +793,10 @@ impl Window {
         println!("WINDOW.BLUR");
     }
 
-    pub fn addEventListener(&self, _event_type: &str, _callback: fn(_event: Event)) {
+    pub fn addEventListener<F>(&self, _event_type: &str, _callback: F)
+    where
+        F: Fn(Event) + 'static,
+    {
         // Mock implementation for transpilation
     }
 
@@ -952,9 +1003,10 @@ impl Location {
         println!("LOCATION.RELOAD: page reloading");
     }
 
-    pub fn assign(&mut self, url: &str) {
+    pub fn assign(&self, url: &str) {
+        // &self (not &mut) so it is callable on the `location` static;
+        // the mock has no observable state change.
         println!("LOCATION.ASSIGN: navigating to {}", url);
-        self.href = url.to_string();
     }
 
     pub fn replace(&mut self, url: &str) {
@@ -2508,13 +2560,15 @@ impl MediaDeviceInfo {
 pub struct MediaDevices;
 
 impl MediaDevices {
-    pub fn getUserMedia(&self, constraints: &MediaStreamConstraints) -> Promise<MediaStream> {
+    /// Accepts any constraints-shaped value (a `{video, audio}` object in JS):
+    /// `MediaStreamConstraints`, or any user-defined `#[js_type]` struct.
+    pub fn getUserMedia<C>(&self, constraints: &C) -> Promise<MediaStream> {
         // This will transpile to: navigator.mediaDevices.getUserMedia(constraints)
         // which returns a Promise<MediaStream> in JavaScript
         Promise::new()
     }
 
-    pub fn getDisplayMedia(&self, constraints: &MediaStreamConstraints) -> Promise<MediaStream> {
+    pub fn getDisplayMedia<C>(&self, constraints: &C) -> Promise<MediaStream> {
         println!("MediaDevices.getDisplayMedia()");
         Promise::new()
     }
@@ -2807,15 +2861,20 @@ impl RTCPeerConnection {
         Promise::new()
     }
 
-    pub fn setLocalDescription(&self, description: &RTCSessionDescription) -> Promise<()> {
-        println!("RTCPeerConnection.setLocalDescription({})", description.r#type);
+    /// Accepts any description-shaped value (a `{type, sdp}` object in JS):
+    /// `RTCSessionDescription`, or any user-defined `#[js_type]` struct with
+    /// `r#type`/`sdp` fields.
+    pub fn setLocalDescription<D: serde::Serialize>(&self, description: &D) -> Promise<()> {
+        println!("RTCPeerConnection.setLocalDescription()");
         // Note: In real WebRTC, this would update the connection state
         // but for Mojes transpilation, the browser handles state changes
         Promise::new()
     }
 
-    pub fn setRemoteDescription(&self, description: &RTCSessionDescription) -> Promise<()> {
-        println!("RTCPeerConnection.setRemoteDescription({})", description.r#type);
+    /// Accepts any description-shaped value (a `{type, sdp}` object in JS),
+    /// see [`RTCPeerConnection::setLocalDescription`].
+    pub fn setRemoteDescription<D: serde::Serialize>(&self, description: &D) -> Promise<()> {
+        println!("RTCPeerConnection.setRemoteDescription()");
         // Note: In real WebRTC, this would update the connection state
         // but for Mojes transpilation, the browser handles state changes
         Promise::new()
@@ -3036,5 +3095,62 @@ impl AbortController {
         println!("AbortController.abort()");
         // In a real implementation, this would set signal.aborted = true
         // and dispatch an abort event
+    }
+}
+
+// Tests for the WebRTC/JSON API surface added for mojes-conf.
+#[cfg(test)]
+mod tests_conf_api {
+    use super::*;
+
+    #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+    struct Msg {
+        r#type: String,
+        n: u32,
+    }
+
+    #[test]
+    fn json_global_round_trips() {
+        let m = Msg { r#type: "offer".into(), n: 7 };
+        let s = JSON.stringify(&m);
+        assert!(s.contains("\"offer\""));
+        let back: Msg = JSON.parse(&s);
+        assert_eq!(back, m);
+    }
+
+    #[test]
+    fn element_has_srcobject_and_remove() {
+        let mut el = Element::new("video");
+        assert!(el.srcObject.is_none());
+        el.srcObject = Some(MediaStream::new());
+        assert!(el.srcObject.is_some());
+        el.remove(); // must exist and take no args
+    }
+
+    #[test]
+    fn peer_connection_accepts_generic_description() {
+        // A user-defined description-shaped struct is accepted by
+        // setLocalDescription / setRemoteDescription (generic bound).
+        #[derive(serde::Serialize)]
+        struct Desc {
+            r#type: String,
+            sdp: String,
+        }
+        let cfg = RTCConfiguration::new();
+        let pc = RTCPeerConnection::new(&cfg);
+        let d = Desc { r#type: "offer".into(), sdp: "v=0".into() };
+        let _ = pc.setLocalDescription(&d);
+        let _ = pc.setRemoteDescription(&d);
+    }
+
+    #[test]
+    fn get_user_media_accepts_generic_constraints() {
+        #[derive(serde::Serialize)]
+        struct C {
+            video: bool,
+            audio: bool,
+        }
+        let c = C { video: true, audio: true };
+        let _ = navigator.mediaDevices.getUserMedia(&c);
     }
 }

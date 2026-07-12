@@ -2538,6 +2538,10 @@ fn handle_method_call(
                     type_args: None,
                     ctxt: SyntaxContext::empty(),
                 }))
+            } else if js_args.is_empty() {
+                // Zero-argument remove(): DOM Element.remove() - removes the
+                // element from the document. Pass through as a method call.
+                Ok(state.mk_call_expr(state.mk_member_expr(receiver, "remove"), vec![]))
             } else {
                 Err("remove() expects exactly one argument".to_string())
             }
