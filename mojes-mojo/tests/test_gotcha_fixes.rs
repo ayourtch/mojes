@@ -108,6 +108,30 @@ fn format_with_if_expression_returns_value() {
 }
 
 #[test]
+fn sequential_loops_reusing_a_variable_name() {
+    // Two loops binding the same name: the second gets shadow-renamed
+    // (id_1), and its body must reference the RENAMED variable. A body
+    // transpiled before the loop variable was declared referenced the stale
+    // outer `id` -> "ReferenceError: id is not defined" at runtime (seen in
+    // the wild in mojes-conf's draw_composite).
+    let b: Block = parse_quote!({
+        let mut acc = "".to_string();
+        let pairs = vec![("a", 1), ("b", 2)];
+        for (id, _n) in pairs.iter().enumerate() {
+            acc += &format!("{}", id);
+        }
+        let names = vec!["x".to_string(), "y".to_string()];
+        for id in names {
+            acc += &id;
+        }
+        return acc;
+    });
+    let js = rust_block_to_js(&b);
+    let v = eval_block_returning(&b);
+    assert_eq!(as_str(&v), "01xy", "generated JS:\n{js}");
+}
+
+#[test]
 fn continue_does_not_freeze_enumerate_index() {
     let b: Block = parse_quote!({
         let mut sum = 0;

@@ -5193,12 +5193,15 @@ fn convert_for_to_stmt(
     for_expr: &syn::ExprForLoop,
     state: &mut TranspilerState,
 ) -> Result<js::Stmt, String> {
-    // Convert the iterable expression
+    // Convert the iterable expression FIRST: it must resolve names in the
+    // scope OUTSIDE the loop, before the loop variable shadows anything.
     let iterable = rust_expr_to_js_with_state(&for_expr.expr, state)?;
 
-    // Convert loop body
-    let body_stmts = rust_block_to_js_with_state(BlockAction::NoReturn, &for_expr.body, state)?;
-
+    // NOTE: the loop body is transpiled inside each pattern arm, AFTER the
+    // loop variables are declared - declaring them later would make the body
+    // resolve those names against stale outer bindings (e.g. two sequential
+    // `for id in ..` loops: the second declares `id_1`, and a body converted
+    // too early would still reference `id`).
     match &*for_expr.pat {
         Pat::Ident(pat_ident) => {
             // Simple case: for x in items
@@ -5207,6 +5210,10 @@ fn convert_for_to_stmt(
 
             // Declare the variable in the current scope
             let js_loop_var = state.declare_variable(loop_var, js_loop_var.clone(), false);
+
+            // Convert loop body (loop variable now resolvable)
+            let body_stmts =
+                rust_block_to_js_with_state(BlockAction::NoReturn, &for_expr.body, state)?;
 
             // Create for...of loop
             Ok(js::Stmt::ForOf(js::ForOfStmt {
@@ -5271,6 +5278,10 @@ fn convert_for_to_stmt(
                 optional: false,
                 type_ann: None,
             });
+
+            // Convert loop body (loop variables now resolvable)
+            let body_stmts =
+                rust_block_to_js_with_state(BlockAction::NoReturn, &for_expr.body, state)?;
 
             // For tuple destructuring, we likely need .entries() for Maps/Objects
             // Use an IIFE to universally handle Maps, Objects, and Arrays
