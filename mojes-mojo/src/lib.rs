@@ -1237,6 +1237,9 @@ pub fn rust_block_to_js_with_params_and_state(
     }
 
     for stmt in &block.stmts {
+        // Wrap each statement so any transpile error names the exact Rust
+        // source that failed ("in `<stmt>`: <reason>").
+        let stmt_ctx = (|| -> Result<(), String> {
         match stmt {
             Stmt::Local(local) => {
                 debug_print!("DEBUG BLOCK LOCAL: {:?}", &local);
@@ -1248,17 +1251,21 @@ pub fn rust_block_to_js_with_params_and_state(
                     let js_stmt = handle_function_definition(item_fn, state)?;
                     js_stmts.push(js_stmt);
                 }
-                syn::Item::Struct(item_struct) => {
-                    panic!(
-                        "Struct definitions in blocks not fully supported: {:?}",
-                        item
-                    );
+                syn::Item::Struct(_) => {
+                    return Err("nested `struct` definitions inside a function body are not \
+                        supported; move the struct to module scope and annotate it with \
+                        `#[js_type]`".to_string());
                 }
-                syn::Item::Enum(item_enum) => {
-                    panic!("Enum definitions in blocks not fully supported: {:?}", item);
+                syn::Item::Enum(_) => {
+                    return Err("nested `enum` definitions inside a function body are not \
+                        supported; move the enum to module scope and annotate it with \
+                        `#[js_type]`".to_string());
                 }
-                _ => {
-                    panic!("Unsupported item type in block: {:?}", item);
+                other => {
+                    return Err(format!(
+                        "this item is not supported inside a function body: `{}`",
+                        source_snippet(other)
+                    ));
                 }
             },
             Stmt::Expr(expr, semi) => {
@@ -1340,10 +1347,15 @@ pub fn rust_block_to_js_with_params_and_state(
                 js_stmts.push(state.mk_expr_stmt(js_expr));
             }
             _ => {
-                state.add_warning(format!("Unsupported statement type: {:?}", stmt));
-                panic!("Unsupported statement type: {:?}", stmt);
+                return Err(format!(
+                    "unsupported statement, cannot translate to JavaScript: `{}`",
+                    source_snippet(stmt)
+                ));
             }
         }
+        Ok(())
+        })();
+        stmt_ctx.map_err(|e| format!("in `{}`: {}", source_snippet(stmt), e))?;
     }
 
     state.exit_scope();
@@ -1369,6 +1381,9 @@ pub fn rust_block_to_js_with_params_and_retval(
     }
 
     for stmt in &block.stmts {
+        // Wrap each statement so any transpile error names the exact Rust
+        // source that failed ("in `<stmt>`: <reason>").
+        let stmt_ctx = (|| -> Result<(), String> {
         match stmt {
             Stmt::Local(local) => {
                 debug_print!("DEBUG BLOCK LOCAL: {:?}", &local);
@@ -1380,17 +1395,21 @@ pub fn rust_block_to_js_with_params_and_retval(
                     let js_stmt = handle_function_definition(item_fn, state)?;
                     js_stmts.push(js_stmt);
                 }
-                syn::Item::Struct(item_struct) => {
-                    panic!(
-                        "Struct definitions in blocks not fully supported: {:?}",
-                        item
-                    );
+                syn::Item::Struct(_) => {
+                    return Err("nested `struct` definitions inside a function body are not \
+                        supported; move the struct to module scope and annotate it with \
+                        `#[js_type]`".to_string());
                 }
-                syn::Item::Enum(item_enum) => {
-                    panic!("Enum definitions in blocks not fully supported: {:?}", item);
+                syn::Item::Enum(_) => {
+                    return Err("nested `enum` definitions inside a function body are not \
+                        supported; move the enum to module scope and annotate it with \
+                        `#[js_type]`".to_string());
                 }
-                _ => {
-                    panic!("Unsupported item type in block: {:?}", item);
+                other => {
+                    return Err(format!(
+                        "this item is not supported inside a function body: `{}`",
+                        source_snippet(other)
+                    ));
                 }
             },
             Stmt::Expr(expr, semi) => {
@@ -1484,10 +1503,15 @@ pub fn rust_block_to_js_with_params_and_retval(
                 js_stmts.push(state.mk_expr_stmt(js_expr));
             }
             _ => {
-                state.add_warning(format!("Unsupported statement type: {:?}", stmt));
-                panic!("Unsupported statement type: {:?}", stmt);
+                return Err(format!(
+                    "unsupported statement, cannot translate to JavaScript: `{}`",
+                    source_snippet(stmt)
+                ));
             }
         }
+        Ok(())
+        })();
+        stmt_ctx.map_err(|e| format!("in `{}`: {}", source_snippet(stmt), e))?;
     }
 
     state.exit_scope();
@@ -3420,7 +3444,12 @@ fn handle_macro_expr(mac: &syn::Macro, state: &mut TranspilerState) -> Result<js
                 exprs: vec![Box::new(log_call), Box::new(expr)],
             }))
         }
-        _ => panic!("Unsupported macro: {}", macro_name),
+        _ => Err(format!(
+            "Unsupported macro `{}!` — no JavaScript mapping exists for it. \
+             Supported macros include format!, println!/eprint!/print!, vec!, \
+             panic!, assert!/assert_eq!, todo!/unimplemented!, dbg!.",
+            macro_name
+        )),
     }
 }
 
@@ -6171,14 +6200,18 @@ mod tests {
     }
 }
 
-/// Generate JavaScript methods for a Rust impl block (old API)
+/// Generate JavaScript methods for a Rust impl block, returning a readable
+/// error instead of panicking.
+pub fn try_generate_js_methods_for_impl(input_impl: &ItemImpl) -> Result<String, String> {
+    let module_items = generate_js_methods_for_impl_with_state(input_impl)?;
+    ast_to_code(&module_items)
+        .map_err(|e| format!("internal error emitting JavaScript from the AST: {e}"))
+}
+
+/// Generate JavaScript methods for a Rust impl block (old API — panics).
 pub fn generate_js_methods_for_impl(input_impl: &ItemImpl) -> String {
-    let mut state = TranspilerState::new();
-
-    let module_items = generate_js_methods_for_impl_with_state(input_impl)
-        .expect("Failed to generate JavaScript methods for impl block");
-
-    ast_to_code(&module_items).expect("Failed to convert AST to JavaScript code")
+    try_generate_js_methods_for_impl(input_impl)
+        .expect("Failed to generate JavaScript methods for impl block")
 }
 
 /// Handle format macro (old API)
@@ -6265,37 +6298,61 @@ fn handle_reference_expr(
     }
 }
 
-/// Convert Rust block to JavaScript (old API)
-pub fn rust_block_to_js(block: &Block) -> String {
+/// Render a syn node back to compact single-line Rust source, for use in
+/// diagnostics ("in `<this code>`: <error>"). Truncated so messages stay short.
+pub fn source_snippet<T: quote::ToTokens>(node: &T) -> String {
+    let raw = node.to_token_stream().to_string();
+    let collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() > 140 {
+        let cut: String = collapsed.chars().take(140).collect();
+        format!("{cut} …")
+    } else {
+        collapsed
+    }
+}
+
+/// Convert Rust block to JavaScript, returning a readable error instead of
+/// panicking. Prefer this in proc-macros so the error can be surfaced as a
+/// `compile_error!` pointing at the user's code.
+pub fn try_rust_block_to_js(block: &Block) -> Result<String, String> {
     let mut state = TranspilerState::new();
 
-    let stmts = rust_block_to_js_with_state(BlockAction::Return, block, &mut state)
-        .expect("Failed to convert Rust block to JavaScript");
+    let stmts = rust_block_to_js_with_state(BlockAction::Return, block, &mut state)?;
 
     let module_items: Vec<js::ModuleItem> = stmts
         .into_iter()
         .map(|stmt| js::ModuleItem::Stmt(stmt))
         .collect();
 
-    ast_to_code(&module_items).expect("Failed to convert block AST to JavaScript code")
+    ast_to_code(&module_items)
+        .map_err(|e| format!("internal error emitting JavaScript from the AST: {e}"))
 }
 
-/// Convert Rust expression to JavaScript (old API)
-pub fn rust_expr_to_js(expr: &Expr) -> String {
+/// Convert Rust block to JavaScript (old API — panics on failure).
+pub fn rust_block_to_js(block: &Block) -> String {
+    try_rust_block_to_js(block).expect("Failed to convert Rust block to JavaScript")
+}
+
+/// Convert Rust expression to JavaScript, returning a readable error instead
+/// of panicking.
+pub fn try_rust_expr_to_js(expr: &Expr) -> Result<String, String> {
     let mut state = TranspilerState::new();
 
-    let js_expr = rust_expr_to_js_with_action_and_state(BlockAction::Return, expr, &mut state)
-        .expect("Failed to convert Rust expression to JavaScript");
+    let js_expr =
+        rust_expr_to_js_with_action_and_state(BlockAction::Return, expr, &mut state)?;
 
-    // Convert single expression to code
     let module_items = vec![js::ModuleItem::Stmt(js::Stmt::Expr(js::ExprStmt {
         span: DUMMY_SP,
         expr: Box::new(js_expr),
     }))];
 
-    let code = ast_to_code_trimmed(&module_items)
-        .expect("Failed to convert expression AST to JavaScript code");
-    code
+    ast_to_code_trimmed(&module_items)
+        .map_err(|e| format!("internal error emitting JavaScript from the AST: {e}"))
+}
+
+/// Convert Rust expression to JavaScript (old API — panics on failure).
+pub fn rust_expr_to_js(expr: &Expr) -> String {
+    try_rust_expr_to_js(expr).expect("Failed to convert Rust expression to JavaScript")
 }
 
 /// Generate JavaScript class for struct (old API)

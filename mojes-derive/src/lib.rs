@@ -6,8 +6,6 @@ use syn::{ItemEnum, ItemFn, ItemStruct, Pat, parse_macro_input};
 use mojes_mojo::format_rust_type;
 use mojes_mojo::generate_js_class_for_struct;
 use mojes_mojo::generate_js_enum;
-use mojes_mojo::generate_js_methods_for_impl;
-use mojes_mojo::rust_block_to_js;
 use syn::{Fields, Ident};
 
 /// Generate Rust JSON methods for enum impl block
@@ -255,8 +253,23 @@ pub fn to_js(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
 
-    // Convert function body to JavaScript
-    js_body.push_str(&rust_block_to_js(&input_fn.block));
+    // Convert function body to JavaScript. Surface any transpilation failure
+    // as a compile error pointing at the function, with the offending Rust
+    // source and reason, instead of an opaque "custom attribute panicked".
+    match mojes_mojo::try_rust_block_to_js(&input_fn.block) {
+        Ok(js) => js_body.push_str(&js),
+        Err(reason) => {
+            return syn::Error::new_spanned(
+                &input_fn.sig,
+                format!(
+                    "[mojes] #[to_js] cannot transpile `{}` to JavaScript:\n  {}",
+                    js_fn_name, reason
+                ),
+            )
+            .to_compile_error()
+            .into();
+        }
+    }
 
     // Create the JavaScript function string
     let async_prefix = if input_fn.sig.asyncness.is_some() { "async " } else { "" };
@@ -357,8 +370,23 @@ pub fn js_object(_attr: TokenStream, item: TokenStream) -> TokenStream {
         .into();
     };
 
-    // Generate JavaScript methods for the impl block
-    let js_methods = generate_js_methods_for_impl(&input_impl);
+    // Generate JavaScript methods for the impl block, surfacing any failure as
+    // a compile error on the impl instead of an opaque panic.
+    let js_methods = match mojes_mojo::try_generate_js_methods_for_impl(&input_impl) {
+        Ok(js) => js,
+        Err(reason) => {
+            return syn::Error::new_spanned(
+                &input_impl.self_ty,
+                format!(
+                    "[mojes] #[js_object] cannot transpile the impl block for `{}` to \
+                     JavaScript:\n  {}",
+                    struct_name, reason
+                ),
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
 
     let js_const_name = format_ident!("{}_JS_METHODS", struct_name.to_uppercase());
 
