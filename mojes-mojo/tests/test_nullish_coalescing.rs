@@ -1,5 +1,7 @@
-// Tests for unwrap_or, unwrap_or_else, unwrap_or_default transpilation
-// to JavaScript nullish coalescing (??) operator
+// Tests for unwrap_or, unwrap_or_else, unwrap_or_default transpilation.
+// These now emit a Result-aware dispatcher instead of a bare `??`:
+// null/undefined (None) and {error: ..} (Err) take the default,
+// {ok: v} unwraps to v, and any plain value passes through.
 use mojes_mojo::*;
 use syn::{parse_quote, Expr, Block};
 
@@ -16,7 +18,7 @@ fn test_unwrap_or_transpilation() {
     };
     let js = rust_expr_to_js(&expr);
     println!("JS unwrap_or: {}", &js);
-    assert!(js.contains("??"), "Expected nullish coalescing operator, got: {}", &js);
+    assert!(js.contains("v && v.error !== undefined"), "Expected Result-aware dispatch, got: {}", &js);
     assert!(js.contains("42"), "Expected default value 42, got: {}", &js);
 }
 
@@ -28,7 +30,7 @@ fn test_unwrap_or_string_default() {
     };
     let js = rust_expr_to_js(&expr);
     println!("JS unwrap_or string: {}", &js);
-    assert!(js.contains("??"), "Expected nullish coalescing operator, got: {}", &js);
+    assert!(js.contains("v && v.error !== undefined"), "Expected Result-aware dispatch, got: {}", &js);
     assert!(js.contains("default"), "Expected default string value, got: {}", &js);
 }
 
@@ -40,7 +42,7 @@ fn test_unwrap_or_else_transpilation() {
     };
     let js = rust_expr_to_js(&expr);
     println!("JS unwrap_or_else: {}", &js);
-    assert!(js.contains("??"), "Expected nullish coalescing operator, got: {}", &js);
+    assert!(js.contains("v && v.error !== undefined"), "Expected Result-aware dispatch, got: {}", &js);
 }
 
 #[test]
@@ -51,7 +53,7 @@ fn test_unwrap_or_default_transpilation() {
     };
     let js = rust_expr_to_js(&expr);
     println!("JS unwrap_or_default: {}", &js);
-    assert!(js.contains("??"), "Expected nullish coalescing operator, got: {}", &js);
+    assert!(js.contains("v && v.error !== undefined"), "Expected Result-aware dispatch, got: {}", &js);
     assert!(js.contains("null"), "Expected null as default, got: {}", &js);
 }
 

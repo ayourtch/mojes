@@ -375,6 +375,78 @@ impl TranspilerState {
         self.mk_iife_with_this_context(stmts)
     }
 
+    /// `((p1, p2, ...) => body)(arg1, arg2, ...)` - an immediately-invoked
+    /// arrow with an expression body, used for value-level dispatch (e.g.
+    /// Result-aware unwrap) without evaluating the receiver twice.
+    pub fn mk_arrow_iife(
+        &self,
+        params: &[&str],
+        body: js::Expr,
+        args: Vec<js::Expr>,
+    ) -> js::Expr {
+        let arrow = js::ArrowExpr {
+            span: DUMMY_SP,
+            params: params
+                .iter()
+                .map(|p| {
+                    js::Pat::Ident(js::BindingIdent {
+                        id: self.mk_ident(p),
+                        type_ann: None,
+                    })
+                })
+                .collect(),
+            body: Box::new(js::BlockStmtOrExpr::Expr(Box::new(body))),
+            is_async: false,
+            is_generator: false,
+            type_params: None,
+            return_type: None,
+            ctxt: SyntaxContext::empty(),
+        };
+        js::Expr::Call(js::CallExpr {
+            span: DUMMY_SP,
+            callee: js::Callee::Expr(Box::new(js::Expr::Paren(js::ParenExpr {
+                span: DUMMY_SP,
+                expr: Box::new(js::Expr::Arrow(arrow)),
+            }))),
+            args: args
+                .into_iter()
+                .map(|expr| js::ExprOrSpread {
+                    spread: None,
+                    expr: Box::new(expr),
+                })
+                .collect(),
+            type_args: None,
+            ctxt: SyntaxContext::empty(),
+        })
+    }
+
+    /// `v === null || v === undefined` for an already-bound identifier.
+    pub fn mk_nullish_check(&self, ident: &str) -> js::Expr {
+        self.mk_binary_expr(
+            self.mk_binary_expr(
+                js::Expr::Ident(self.mk_ident(ident)),
+                js::BinaryOp::EqEqEq,
+                self.mk_null_lit(),
+            ),
+            js::BinaryOp::LogicalOr,
+            self.mk_binary_expr(
+                js::Expr::Ident(self.mk_ident(ident)),
+                js::BinaryOp::EqEqEq,
+                self.mk_undefined(),
+            ),
+        )
+    }
+
+    /// `v.<field> !== undefined` for an already-bound identifier - how the
+    /// transpiled code recognizes Result values ({ok: ...} / {error: ...}).
+    pub fn mk_result_field_check(&self, ident: &str, field: &str) -> js::Expr {
+        self.mk_binary_expr(
+            self.mk_member_expr(js::Expr::Ident(self.mk_ident(ident)), field),
+            js::BinaryOp::NotEqEq,
+            self.mk_undefined(),
+        )
+    }
+
     pub fn mk_iife_with_this_context(&self, stmts: Vec<js::Stmt>) -> js::Expr {
         // Detect if any statement contains an await expression
         let is_async = stmts_contain_await(&stmts);
@@ -1144,7 +1216,7 @@ fn convert_if_let_some_to_expr(
         if let Pat::Ident(pat_ident) = inner_pat {
             let var_name = pat_ident.ident.to_string();
             let js_var_name = escape_js_identifier(&var_name);
-            state.declare_variable(var_name, js_var_name.clone(), false);
+            let js_var_name = state.declare_variable(var_name, js_var_name.clone(), false);
 
             then_stmts.push(state.mk_var_decl(
                 &js_var_name,
@@ -1656,15 +1728,50 @@ pub fn rust_expr_to_js_with_action_and_state(
 
         // Handle paths (variables, constants)
         Expr::Path(path) => {
+            // Qualified paths in value position (Enum::Variant, Type::CONST):
+            // keep the qualifier as the JS object (`Mode::Running` ->
+            // `Mode.Running`), otherwise the variant would come out as a bare
+            // undefined identifier. Option::None still maps to null, and
+            // Self:: resolves to the current struct.
+            if path.path.segments.len() >= 2 {
+                let type_name = path.path.segments[path.path.segments.len() - 2]
+                    .ident
+                    .to_string();
+                let member = path.path.segments.last().unwrap().ident.to_string();
+                if type_name == "Option" && member == "None" {
+                    return Ok(state.mk_null_lit());
+                }
+                let base = if type_name == "Self" {
+                    state
+                        .get_current_struct_name()
+                        .map(|s| s.to_string())
+                        .unwrap_or(type_name)
+                } else {
+                    type_name
+                };
+                return Ok(state.mk_member_expr(
+                    js::Expr::Ident(state.mk_ident(&base)),
+                    &member,
+                ));
+            }
+
             if let Some(last_segment) = path.path.segments.last() {
                 let ident_str = last_segment.ident.to_string();
 
                 match ident_str.as_str() {
                     "self" => Ok(state.mk_this_expr()),
                     "Self" => {
-                        // Replace Self with the current struct name
+                        // A bare `Self` in expression position constructs the
+                        // (unit) struct's value, so it must become an instance
+                        // (`new Struct()`), not the class identifier.
                         if let Some(struct_name) = state.get_current_struct_name() {
-                            Ok(js::Expr::Ident(state.mk_ident(struct_name)))
+                            Ok(js::Expr::New(js::NewExpr {
+                                span: DUMMY_SP,
+                                callee: Box::new(js::Expr::Ident(state.mk_ident(struct_name))),
+                                args: Some(vec![]),
+                                type_args: None,
+                                ctxt: SyntaxContext::empty(),
+                            }))
                         } else {
                             // Fallback to "Self" if no struct context
                             Ok(js::Expr::Ident(state.mk_ident("Self")))
@@ -2394,6 +2501,80 @@ fn handle_method_call(
                 vec![receiver]
             ))
         }
+        // str.parse::<N>() -> a Result-shaped value ({ok: n} / {error: msg}),
+        // the same representation Ok()/Err() transpile to, so `match
+        // s.parse() { Ok(n) => .., Err(e) => .. }`, if-let, .unwrap() and
+        // .unwrap_or() all behave. Zero-arg only, so JSON.parse(text) keeps
+        // its native meaning. Emitted JS:
+        //   ((s) => ((v) => Number.isNaN(v)
+        //       ? { error: "invalid number: " + s } : { ok: v }
+        //     )((typeof s === "string" && s.trim() === "") ? NaN : Number(s))
+        //   )(receiver)
+        "parse" if js_args.is_empty() => {
+            let s = || js::Expr::Ident(state.mk_ident("s"));
+            let v = || js::Expr::Ident(state.mk_ident("v"));
+            let mk_obj = |field: &str, value: js::Expr| {
+                js::Expr::Object(js::ObjectLit {
+                    span: DUMMY_SP,
+                    props: vec![js::PropOrSpread::Prop(Box::new(js::Prop::KeyValue(
+                        js::KeyValueProp {
+                            key: js::PropName::Ident(state.mk_ident_name(field)),
+                            value: Box::new(value),
+                        },
+                    )))],
+                })
+            };
+            // Number.isNaN(v) ? {error: "invalid number: " + s} : {ok: v}
+            let inner_body = js::Expr::Cond(js::CondExpr {
+                span: DUMMY_SP,
+                test: Box::new(state.mk_call_expr(
+                    state.mk_member_expr(
+                        js::Expr::Ident(state.mk_ident("Number")),
+                        "isNaN",
+                    ),
+                    vec![v()],
+                )),
+                cons: Box::new(mk_obj(
+                    "error",
+                    state.mk_binary_expr(
+                        state.mk_str_lit("invalid number: "),
+                        js::BinaryOp::Add,
+                        s(),
+                    ),
+                )),
+                alt: Box::new(mk_obj("ok", v())),
+            });
+            // (typeof s === "string" && s.trim() === "") ? NaN : Number(s)
+            // (Number("") is 0, but Rust's "".parse() is an error)
+            let is_blank_string = state.mk_binary_expr(
+                state.mk_binary_expr(
+                    js::Expr::Unary(js::UnaryExpr {
+                        span: DUMMY_SP,
+                        op: js::UnaryOp::TypeOf,
+                        arg: Box::new(s()),
+                    }),
+                    js::BinaryOp::EqEqEq,
+                    state.mk_str_lit("string"),
+                ),
+                js::BinaryOp::LogicalAnd,
+                state.mk_binary_expr(
+                    state.mk_call_expr(state.mk_member_expr(s(), "trim"), vec![]),
+                    js::BinaryOp::EqEqEq,
+                    state.mk_str_lit(""),
+                ),
+            );
+            let v_value = js::Expr::Cond(js::CondExpr {
+                span: DUMMY_SP,
+                test: Box::new(is_blank_string),
+                cons: Box::new(js::Expr::Ident(state.mk_ident("NaN"))),
+                alt: Box::new(state.mk_call_expr(
+                    js::Expr::Ident(state.mk_ident("Number")),
+                    vec![s()],
+                )),
+            });
+            let inner = state.mk_arrow_iife(&["v"], inner_body, vec![v_value]);
+            Ok(state.mk_arrow_iife(&["s"], inner, vec![receiver]))
+        }
         "push" => Ok(state.mk_call_expr(state.mk_member_expr(receiver, "push"), js_args)),
         "pop" => Ok(state.mk_call_expr(state.mk_member_expr(receiver, "pop"), js_args)),
         "contains" => Ok(state.mk_call_expr(state.mk_member_expr(receiver, "includes"), js_args)),
@@ -2982,40 +3163,126 @@ fn handle_method_call(
             }
         }
         "unwrap" => {
-            // .unwrap() is just the value itself in JavaScript
-            Ok(receiver)
+            // Result-aware: {ok: v} unwraps to v, everything else passes
+            // through unchanged (Options are plain values / null in JS):
+            //   ((v) => v && v.ok !== undefined ? v.ok : v)(receiver)
+            let v = || js::Expr::Ident(state.mk_ident("v"));
+            let body = js::Expr::Cond(js::CondExpr {
+                span: DUMMY_SP,
+                test: Box::new(state.mk_binary_expr(
+                    v(),
+                    js::BinaryOp::LogicalAnd,
+                    state.mk_result_field_check("v", "ok"),
+                )),
+                cons: Box::new(state.mk_member_expr(v(), "ok")),
+                alt: Box::new(v()),
+            });
+            Ok(state.mk_arrow_iife(&["v"], body, vec![receiver]))
         }
-        "unwrap_or" => {
-            // .unwrap_or(default) -> receiver ?? default
-            if js_args.len() == 1 {
-                Ok(state.mk_binary_expr(
-                    receiver,
-                    js::BinaryOp::NullishCoalescing,
-                    js_args.into_iter().next().unwrap(),
-                ))
+        "unwrap_or" | "unwrap_or_else" | "unwrap_or_default" => {
+            // ((v, d) => v === null || v === undefined || (v && v.error !== undefined)
+            //     ? <fallback> : v.ok !== undefined ? v.ok : v)(receiver, default?)
+            // None (null/undefined) and Err both take the fallback;
+            // {ok: v} unwraps; any plain value passes through.
+            let v = || js::Expr::Ident(state.mk_ident("v"));
+            let (params, args, fallback): (&[&str], Vec<js::Expr>, js::Expr) =
+                match method_name.as_str() {
+                    "unwrap_or" => {
+                        if js_args.len() != 1 {
+                            return Err("unwrap_or expects exactly one argument".to_string());
+                        }
+                        let d = js_args.into_iter().next().unwrap();
+                        (
+                            &["v", "d"],
+                            vec![receiver, d],
+                            js::Expr::Ident(state.mk_ident("d")),
+                        )
+                    }
+                    "unwrap_or_else" => {
+                        if js_args.len() != 1 {
+                            return Err(
+                                "unwrap_or_else expects exactly one argument".to_string()
+                            );
+                        }
+                        let f = js_args.into_iter().next().unwrap();
+                        (
+                            &["v", "d"],
+                            vec![receiver, f],
+                            state.mk_call_expr(js::Expr::Ident(state.mk_ident("d")), vec![]),
+                        )
+                    }
+                    _ => (&["v"], vec![receiver], state.mk_null_lit()),
+                };
+            let needs_fallback = state.mk_binary_expr(
+                state.mk_nullish_check("v"),
+                js::BinaryOp::LogicalOr,
+                state.mk_binary_expr(
+                    v(),
+                    js::BinaryOp::LogicalAnd,
+                    state.mk_result_field_check("v", "error"),
+                ),
+            );
+            let body = js::Expr::Cond(js::CondExpr {
+                span: DUMMY_SP,
+                test: Box::new(needs_fallback),
+                cons: Box::new(fallback),
+                alt: Box::new(js::Expr::Cond(js::CondExpr {
+                    span: DUMMY_SP,
+                    test: Box::new(state.mk_result_field_check("v", "ok")),
+                    cons: Box::new(state.mk_member_expr(v(), "ok")),
+                    alt: Box::new(v()),
+                })),
+            });
+            Ok(state.mk_arrow_iife(params, body, args))
+        }
+        // Result predicates/adapters, matching the {ok}/{error} shape.
+        "is_ok" | "is_err" if js_args.is_empty() => {
+            // is_ok:  ((v) => v !== null && v !== undefined && v.error === undefined)(r)
+            // is_err: ((v) => v !== null && v !== undefined && v.error !== undefined)(r)
+            let v = || js::Expr::Ident(state.mk_ident("v"));
+            let not_nullish = state.mk_binary_expr(
+                state.mk_binary_expr(v(), js::BinaryOp::NotEqEq, state.mk_null_lit()),
+                js::BinaryOp::LogicalAnd,
+                state.mk_binary_expr(v(), js::BinaryOp::NotEqEq, state.mk_undefined()),
+            );
+            let err_op = if method_name == "is_ok" {
+                js::BinaryOp::EqEqEq
             } else {
-                Err("unwrap_or expects exactly one argument".to_string())
-            }
+                js::BinaryOp::NotEqEq
+            };
+            let err_check = state.mk_binary_expr(
+                state.mk_member_expr(v(), "error"),
+                err_op,
+                state.mk_undefined(),
+            );
+            let body = state.mk_binary_expr(not_nullish, js::BinaryOp::LogicalAnd, err_check);
+            Ok(state.mk_arrow_iife(&["v"], body, vec![receiver]))
         }
-        "unwrap_or_else" => {
-            // .unwrap_or_else(|| default) -> receiver ?? closure()
-            if js_args.len() == 1 {
-                Ok(state.mk_binary_expr(
-                    receiver,
-                    js::BinaryOp::NullishCoalescing,
-                    state.mk_call_expr(js_args.into_iter().next().unwrap(), vec![]),
-                ))
-            } else {
-                Err("unwrap_or_else expects exactly one argument".to_string())
-            }
-        }
-        "unwrap_or_default" => {
-            // .unwrap_or_default() -> receiver ?? null
-            Ok(state.mk_binary_expr(
-                receiver,
-                js::BinaryOp::NullishCoalescing,
-                state.mk_null_lit(),
-            ))
+        "ok" if js_args.is_empty() => {
+            // Result -> Option: Err becomes null, Ok unwraps, rest passes:
+            // ((v) => v && v.error !== undefined ? null
+            //       : v && v.ok !== undefined ? v.ok : v)(receiver)
+            let v = || js::Expr::Ident(state.mk_ident("v"));
+            let body = js::Expr::Cond(js::CondExpr {
+                span: DUMMY_SP,
+                test: Box::new(state.mk_binary_expr(
+                    v(),
+                    js::BinaryOp::LogicalAnd,
+                    state.mk_result_field_check("v", "error"),
+                )),
+                cons: Box::new(state.mk_null_lit()),
+                alt: Box::new(js::Expr::Cond(js::CondExpr {
+                    span: DUMMY_SP,
+                    test: Box::new(state.mk_binary_expr(
+                        v(),
+                        js::BinaryOp::LogicalAnd,
+                        state.mk_result_field_check("v", "ok"),
+                    )),
+                    cons: Box::new(state.mk_member_expr(v(), "ok")),
+                    alt: Box::new(v()),
+                })),
+            });
+            Ok(state.mk_arrow_iife(&["v"], body, vec![receiver]))
         }
         _ => {
             // Default method call
@@ -3075,21 +3342,37 @@ fn handle_function_call(
                             }
                         }
                         _ => {
-                            // Regular constructor call
-                            return Ok(js::Expr::New(js::NewExpr {
+                            // Constructor call with runtime dispatch. A type
+                            // whose impl block defines `fn new(..)` gets it
+                            // attached as a static `Type.new`, and that is
+                            // what must run (it initializes every field).
+                            // Types without one (browser built-ins like
+                            // WebSocket, the Arc/Mutex shims, plain structs)
+                            // fall back to the positional `new Type(...)`.
+                            let ctor_args: Vec<js::ExprOrSpread> = js_args
+                                .iter()
+                                .cloned()
+                                .map(|expr| js::ExprOrSpread {
+                                    spread: None,
+                                    expr: Box::new(expr),
+                                })
+                                .collect();
+                            let static_new = state.mk_member_expr(
+                                js::Expr::Ident(state.mk_ident(&type_name)),
+                                "new",
+                            );
+                            let new_expr = js::Expr::New(js::NewExpr {
                                 span: DUMMY_SP,
                                 callee: Box::new(js::Expr::Ident(state.mk_ident(&type_name))),
-                                args: Some(
-                                    js_args
-                                        .into_iter()
-                                        .map(|expr| js::ExprOrSpread {
-                                            spread: None,
-                                            expr: Box::new(expr),
-                                        })
-                                        .collect(),
-                                ),
+                                args: Some(ctor_args),
                                 type_args: None,
                                 ctxt: SyntaxContext::empty(),
+                            });
+                            return Ok(js::Expr::Cond(js::CondExpr {
+                                span: DUMMY_SP,
+                                test: Box::new(static_new.clone()),
+                                cons: Box::new(state.mk_call_expr(static_new, js_args)),
+                                alt: Box::new(new_expr),
                             }));
                         }
                     }
@@ -4800,7 +5083,7 @@ fn convert_while_let_option_to_stmt(
                 // Add variable binding if present
                 if let Some(var_name) = var_name {
                     let js_var_name = escape_js_identifier(&var_name);
-                    state.declare_variable(var_name, js_var_name.clone(), false);
+                    let js_var_name = state.declare_variable(var_name, js_var_name.clone(), false);
                     loop_body.push(state.mk_var_decl(
                         &js_var_name,
                         Some(js::Expr::Ident(state.mk_ident("_temp"))),
@@ -4904,7 +5187,7 @@ fn convert_for_to_stmt(
             let js_loop_var = escape_js_identifier(&loop_var);
 
             // Declare the variable in the current scope
-            state.declare_variable(loop_var, js_loop_var.clone(), false);
+            let js_loop_var = state.declare_variable(loop_var, js_loop_var.clone(), false);
 
             // Create for...of loop
             Ok(js::Stmt::ForOf(js::ForOfStmt {
@@ -4959,7 +5242,7 @@ fn convert_for_to_stmt(
                     .iter()
                     .map(|name| {
                         let js_name = escape_js_identifier(name);
-                        state.declare_variable(name.clone(), js_name.clone(), false);
+                        let js_name = state.declare_variable(name.clone(), js_name.clone(), false);
                         Some(js::Pat::Ident(js::BindingIdent {
                             id: state.mk_ident(&js_name),
                             type_ann: None,
@@ -5118,8 +5401,8 @@ fn convert_for_to_stmt_enhanced(
             let js_item_var = escape_js_identifier(&item_var);
 
             // Declare variables
-            state.declare_variable(index_var, js_index_var.clone(), false);
-            state.declare_variable(item_var, js_item_var.clone(), false);
+            let js_index_var = state.declare_variable(index_var, js_index_var.clone(), false);
+            let js_item_var = state.declare_variable(item_var, js_item_var.clone(), false);
 
             let iterable = rust_expr_to_js_with_state(&collection_expr, state)?;
             let body_stmts =
@@ -5240,7 +5523,7 @@ fn handle_pattern_binding(
             // Variable binding - always matches, and we need to bind the variable
             let var_name = pat_ident.ident.to_string();
             let js_var_name = escape_js_identifier(&var_name);
-            state.declare_variable(var_name, js_var_name.clone(), false);
+            let js_var_name = state.declare_variable(var_name, js_var_name.clone(), false);
 
             // Add: const x = _match_value;
             binding_stmts.push(state.mk_var_decl(
@@ -5304,7 +5587,7 @@ fn handle_pattern_binding(
                         if let Pat::Ident(pat_ident) = inner_pat {
                             let var_name = pat_ident.ident.to_string();
                             let js_var_name = escape_js_identifier(&var_name);
-                            state.declare_variable(var_name, js_var_name.clone(), false);
+                            let js_var_name = state.declare_variable(var_name, js_var_name.clone(), false);
 
                             // Add: const x = _match_value;
                             binding_stmts.push(state.mk_var_decl(
@@ -5356,7 +5639,7 @@ fn handle_pattern_binding(
                             Pat::Ident(pat_ident) => {
                                 let var_name = pat_ident.ident.to_string();
                                 let js_var_name = escape_js_identifier(&var_name);
-                                state.declare_variable(var_name, js_var_name.clone(), false);
+                                let js_var_name = state.declare_variable(var_name, js_var_name.clone(), false);
                                 
                                 // Generate appropriate field access based on pattern type
                                 let field_name = if variant_name == "Ok" || variant_name == "Err" {
@@ -5462,7 +5745,7 @@ fn handle_pattern_binding(
                         // Simple variable binding: (a, b) => const a = _match_value[0]; const b = _match_value[1];
                         let var_name = pat_ident.ident.to_string();
                         let js_var_name = escape_js_identifier(&var_name);
-                        state.declare_variable(var_name, js_var_name.clone(), false);
+                        let js_var_name = state.declare_variable(var_name, js_var_name.clone(), false);
                         
                         binding_stmts.push(state.mk_var_decl(
                             &js_var_name,
@@ -5500,7 +5783,7 @@ fn handle_pattern_binding(
                                     if let Pat::Ident(pat_ident) = inner_pat {
                                         let var_name = pat_ident.ident.to_string();
                                         let js_var_name = escape_js_identifier(&var_name);
-                                        state.declare_variable(var_name, js_var_name.clone(), false);
+                                        let js_var_name = state.declare_variable(var_name, js_var_name.clone(), false);
                                         
                                         binding_stmts.push(state.mk_var_decl(
                                             &js_var_name,

@@ -180,7 +180,12 @@ fn test_method_call_expressions_0() {
     assert!(result.contains("=== null") || result.contains("=== undefined"));
 
     let expr: Expr = parse_quote!(opt.unwrap());
-    assert_eq!(rust_expr_to_js(&expr), "opt");
+    // Result-aware unwrap: {ok: v} unwraps, plain values pass through.
+    let result = rust_expr_to_js(&expr);
+    assert!(
+        result.contains("v.ok !== undefined ? v.ok : v") && result.ends_with("(opt)"),
+        "got: {result}"
+    );
 }
 
 // Fix the test_method_call_expressions test in expressions.rs
@@ -215,7 +220,12 @@ fn test_method_call_expressions() {
     assert!(result.contains("=== null") || result.contains("=== undefined"));
 
     let expr: Expr = parse_quote!(opt.unwrap());
-    assert_eq!(rust_expr_to_js(&expr), "opt");
+    // Result-aware unwrap: {ok: v} unwraps, plain values pass through.
+    let result = rust_expr_to_js(&expr);
+    assert!(
+        result.contains("v.ok !== undefined ? v.ok : v") && result.ends_with("(opt)"),
+        "got: {result}"
+    );
 }
 
 // Add additional test to verify the distinction between methods and properties

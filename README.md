@@ -19,9 +19,9 @@ JavaScript that calls the real DOM/WebRTC/WebSocket APIs directly.
 
 ## Status
 
-Experimental. The transpiler covers a useful subset of Rust (enough to write a
-real WebRTC video-conference client — see
-[Real-world example](#real-world-example-mojes-conf)), but plenty of Rust does
+Experimental. The transpiler covers a useful subset of Rust (enough to write
+real interactive browser clients — see
+[the sample project](#example-project-mojes-sample)), but plenty of Rust does
 not transpile, some things transpile with sharp edges (see
 [Gotchas](#gotchas)), and the APIs may change without notice. Version 0.1.0,
 not published to crates.io.
@@ -61,15 +61,15 @@ brings in the slice declared by `mojes-dom-api`.
 
 ```rust
 use mojes::dom::*;                     // browser API stubs + the JS slice
-use mojes::{js_object, js_type, to_js};
+use mojes::to_js;                      // one attribute for everything
 
-#[js_type]                             // → a JS class with toJSON/fromJSON
+#[to_js]                               // on a struct → a JS class with toJSON/fromJSON
 struct Counter {
     count: i32,
     label: String,
 }
 
-#[js_object]                           // → methods on Counter.prototype
+#[to_js]                               // on an impl → methods on Counter.prototype
 impl Counter {
     fn new(label: String) -> Counter {
         Counter { count: 0, label }    // fields in declaration order!
@@ -83,7 +83,7 @@ impl Counter {
     }
 }
 
-#[to_js]                               // → a plain JS function
+#[to_js]                               // on a function → a plain JS function
 fn greet(name: &str) -> String {
     format!("Hello, {}!", name)
 }
@@ -113,10 +113,10 @@ Counter.prototype.increment = function() {
     this.count += 1;
     const el = document.getElementById("counter");
     {
-        const temp_0 = el;
+        const temp_0 = document.getElementById("counter");
         if (temp_0 !== null && temp_0 !== undefined) {
-            const el_1 = temp_0;
-            el_1.textContent = `${this.label}: ${this.count}`;
+            const el = temp_0;
+            el.textContent = `${this.label}: ${this.count}`;
         }
     }
 };
@@ -138,16 +138,23 @@ just a nullable value in JS.
 
 ### The macros
 
-- **`#[to_js]`** — transpiles a free function. Async functions become `async
-  function`s; a failed transpilation is reported as a normal `rustc` compile
-  error pointing at the function, with the reason.
-- **`#[js_type]`** — on a struct or enum: generates the JS class (positional
-  constructor, `toJSON`/`fromJSON`) and, for enums, JSON helpers on both the
-  Rust and JS sides so the two ends can exchange the same wire format via
-  `serde_json`.
-- **`#[js_object]`** — on an inherent `impl` block: transpiles every method.
-  Associated functions (no `self`) become statics (`Type.new = ...`), methods
-  become `Type.prototype.method = ...`.
+**`#[to_js]` works on every supported item kind** and dispatches on what it
+is applied to — it is the only attribute you need to remember:
+
+- **on a function** — transpiles it to a plain JS function. Async functions
+  become `async function`s; a failed transpilation is reported as a normal
+  `rustc` compile error pointing at the function, with the reason.
+- **on a struct or enum** — generates the JS class (positional constructor,
+  `toJSON`/`fromJSON`) and, for enums, JSON helpers on both the Rust and JS
+  sides so the two ends can exchange the same wire format via `serde_json`.
+- **on an inherent `impl` block** — transpiles every method. Associated
+  functions (no `self`) become statics (`Type.new = ...`), methods become
+  `Type.prototype.method = ...`. Call sites of `Type::new(...)` dispatch to
+  the custom static `Type.new` when one exists, falling back to the
+  positional `new Type(...)` constructor otherwise.
+
+`#[js_type]` (structs/enums) and `#[js_object]` (impl blocks) remain as
+explicit spellings of the same transpilations.
 
 ## The browser API stubs (`mojes-dom-api`)
 
@@ -251,18 +258,29 @@ The test suite is large and doubles as the supported-feature list: most tests
 transpile a Rust snippet and then **execute the generated JavaScript with the
 Boa engine**, asserting on its behavior — not just on the emitted text.
 
-## Real-world example: mojes-conf
+## Example project: mojes-sample
 
-[`mojes-conf`](../mojes-conf) (a sibling project of this repository) is a
-small-group WebRTC video conference. Its entire browser client — signaling
-over WebSocket, a full mesh of `RTCPeerConnection`s, `getUserMedia`, trickle
-ICE, DOM UI — is written in Rust in `conf-client/src/lib.rs`, transpiled with
-mojes, and served by an axum server as a single generated `client.js`. It is
-the best reference for what mojes can do today and for the patterns (and
-gotchas) of writing non-trivial clients.
+[`mojes-sample`](https://github.com/ayourtch/mojes-sample) is an interactive
+tour of the transpiler: a small web server whose entire browser side — DOM
+manipulation, events, timers, canvas animation, form handling, storage, XHR —
+is written in Rust and transpiled by mojes. Clone it side by side with this
+repository, `cargo run`, and open <http://localhost:3000/> with the dev tools
+open; "view source" shows the generated JavaScript next to the Rust in
+`src/main.rs`. It is the best reference for what mojes can do today and for
+the patterns (and gotchas) of writing real clients.
 
 ## License
 
-This repository ships the Apache License, Version 2.0 in [LICENSE](LICENSE).
-(The `mojes` crate manifest additionally declares `MIT OR Apache-2.0`; the
-LICENSE file at the repository root is the authoritative text present today.)
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
+  <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or
+  <http://opensource.org/licenses/MIT>)
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in the work by you, as defined in the Apache-2.0
+license, shall be dual licensed as above, without any additional terms or
+conditions.

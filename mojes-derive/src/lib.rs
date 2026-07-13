@@ -186,11 +186,33 @@ pub fn impl_to_js(_attr: TokenStream, item: TokenStream) -> TokenStream {
     output.into()
 }
 
+/// The one attribute to remember: put `#[to_js]` on a free function, a
+/// struct, an enum, or an impl block, and the right transpilation happens
+/// based on what the item is. `#[js_type]` (structs/enums) and
+/// `#[js_object]` (impl blocks) remain as explicit spellings of the same
+/// thing.
 #[proc_macro_attribute]
 pub fn to_js(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    // Parse the input function
-    let input_fn = parse_macro_input!(item as ItemFn);
+    if let Ok(input_fn) = syn::parse::<ItemFn>(item.clone()) {
+        return transpile_fn(input_fn);
+    }
+    if syn::parse::<ItemStruct>(item.clone()).is_ok()
+        || syn::parse::<ItemEnum>(item.clone()).is_ok()
+    {
+        return transpile_type(item);
+    }
+    if let Ok(input_impl) = syn::parse::<ItemImpl>(item.clone()) {
+        return transpile_impl(input_impl);
+    }
+    syn::Error::new_spanned(
+        proc_macro2::TokenStream::from(item),
+        "[mojes] #[to_js] can only be applied to a function, struct, enum, or impl block",
+    )
+    .to_compile_error()
+    .into()
+}
 
+fn transpile_fn(input_fn: ItemFn) -> TokenStream {
     // Get function name
     let fn_name = &input_fn.sig.ident;
     let js_fn_name = fn_name.to_string();
@@ -292,6 +314,10 @@ pub fn to_js(_attr: TokenStream, item: TokenStream) -> TokenStream {
 // New procedural macro for structs
 #[proc_macro_attribute]
 pub fn js_type(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    transpile_type(item)
+}
+
+fn transpile_type(item: TokenStream) -> TokenStream {
     let input = item.clone();
 
     // Try to parse as struct or enum
@@ -348,7 +374,10 @@ pub fn js_type(_attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn js_object(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let input_impl = parse_macro_input!(item as ItemImpl);
+    transpile_impl(input_impl)
+}
 
+fn transpile_impl(input_impl: ItemImpl) -> TokenStream {
     // Get the struct name from the impl block
     let struct_name = if let syn::Type::Path(type_path) = &*input_impl.self_ty {
         if let Some(segment) = type_path.path.segments.last() {

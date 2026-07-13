@@ -24,9 +24,15 @@ fn test_assign_op() {
 
 #[test]
 fn test_new_object() {
+    // Type::new(..) dispatches at runtime: a custom static `Type.new` (from a
+    // #[to_js]/#[js_object] impl) wins, otherwise the positional constructor.
     let expr: Expr = parse_quote!(FooBar::new(FooBar::new()));
     let js_code = rust_expr_to_js(&expr);
-    assert_eq!(js_code, "new FooBar(new FooBar())");
+    let inner = "FooBar.new ? FooBar.new() : new FooBar()";
+    let expected = format!(
+        "FooBar.new ? FooBar.new({inner}) : new FooBar({inner})"
+    );
+    assert_eq!(js_code, expected);
 }
 
 #[test]

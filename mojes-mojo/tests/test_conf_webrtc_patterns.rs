@@ -122,7 +122,12 @@ mod conf_patterns {
             }
         });
         let js = block_js(&b);
-        assert!(js.contains("?? []"), "unwrap_or(vec![]) should be `?? []`:\n{js}");
+        // Result-aware unwrap_or: null/undefined and {error: ..} take the
+        // default, {ok: v} unwraps, plain arrays pass through.
+        assert!(
+            js.contains("(msg.peers, [])"),
+            "unwrap_or(vec![]) should dispatch with [] as the default:\n{js}"
+        );
         assert!(js.contains("for (const p of peers)"), "got:\n{js}");
         assert!(js.contains("await ensure_peer("), "got:\n{js}");
     }
