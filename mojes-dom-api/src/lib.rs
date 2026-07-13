@@ -469,6 +469,16 @@ impl Element {
     }
 
     // Media element playback methods
+    /// <canvas> only: the 2D drawing context.
+    pub fn getContext(&self, _context_type: &str) -> CanvasRenderingContext2D {
+        CanvasRenderingContext2D::new()
+    }
+
+    /// <canvas> only: a MediaStream producing frames of the canvas content.
+    pub fn captureStream(&self, _frame_rate: f64) -> MediaStream {
+        MediaStream::new()
+    }
+
     pub fn play(&mut self) -> Result<(), String> {
         println!("Element.play()");
         Ok(())
@@ -2193,6 +2203,12 @@ mod tests_xhr {
 }
 
 // WebSocket implementation
+/// Payload types WebSocket.send accepts (text or binary chunks).
+pub trait WsSendable {}
+impl WsSendable for str {}
+impl WsSendable for String {}
+impl WsSendable for Blob {}
+
 #[derive(Clone, Debug)]
 pub struct WebSocket {
     pub url: String,
@@ -2206,9 +2222,9 @@ impl WebSocket {
         Ok(Self { url: url.to_string(), readyState: 0, bufferedAmount: 0 })
     }
 
-    pub fn send(&self, data: &str) {
+    /// Send text (&str/String) or binary (Blob) data.
+    pub fn send<T: WsSendable + ?Sized>(&self, _data: &T) {
         // Mock implementation for transpilation
-        println!("WebSocket.send: {}", data);
     }
 
     pub fn close(&self) {
@@ -3098,6 +3114,202 @@ impl AbortController {
     }
 }
 
+// =============================================================================
+// Canvas 2D, MediaRecorder, WebAudio
+// (enough surface for client-side compositing + live streaming)
+// =============================================================================
+
+/// Immutable binary chunk (e.g. one MediaRecorder segment).
+// #[js_type] - Browser built-in, do not export
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Blob {
+    pub size: u64,
+    pub r#type: String,
+}
+
+impl Blob {
+    pub fn new() -> Self {
+        Self {
+            size: 0,
+            r#type: String::new(),
+        }
+    }
+}
+
+/// Delivered by MediaRecorder's "dataavailable" event.
+// #[js_type] - Browser built-in, do not export
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BlobEvent {
+    pub data: Blob,
+}
+
+impl BlobEvent {
+    pub fn new() -> Self {
+        Self { data: Blob::new() }
+    }
+}
+
+/// 2D drawing context of a <canvas> element (`canvas.getContext("2d")`).
+// #[js_type] - Browser built-in, do not export
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CanvasRenderingContext2D {
+    pub fillStyle: String,
+    pub strokeStyle: String,
+    pub font: String,
+    pub textAlign: String,
+}
+
+impl CanvasRenderingContext2D {
+    pub fn new() -> Self {
+        Self {
+            fillStyle: String::new(),
+            strokeStyle: String::new(),
+            font: String::new(),
+            textAlign: String::new(),
+        }
+    }
+
+    pub fn fillRect(&self, _x: f64, _y: f64, _w: f64, _h: f64) {
+        // Mock implementation for transpilation
+    }
+
+    pub fn clearRect(&self, _x: f64, _y: f64, _w: f64, _h: f64) {
+        // Mock implementation for transpilation
+    }
+
+    pub fn fillText(&self, _text: &str, _x: f64, _y: f64) {
+        // Mock implementation for transpilation
+    }
+
+    /// drawImage(image, dx, dy, dWidth, dHeight): draw a <video>/<img>/<canvas>
+    /// element scaled into the destination rectangle.
+    pub fn drawImage(&self, _image: &Element, _dx: f64, _dy: f64, _dw: f64, _dh: f64) {
+        // Mock implementation for transpilation
+    }
+}
+
+/// Records a MediaStream into containerized chunks ("dataavailable" events).
+// #[js_type] - Browser built-in, do not export
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MediaRecorder {
+    /// "inactive" | "recording" | "paused"
+    pub state: String,
+    pub mimeType: String,
+}
+
+impl MediaRecorder {
+    /// `new MediaRecorder(stream, {mimeType, ...})`; options is any
+    /// dictionary-shaped struct (e.g. a #[js_type] struct in client code).
+    pub fn new<O: serde::Serialize>(_stream: &MediaStream, _options: &O) -> Self {
+        Self {
+            state: "inactive".to_string(),
+            mimeType: String::new(),
+        }
+    }
+
+    pub fn start(&self, _timeslice_ms: u32) {
+        // Mock implementation for transpilation
+    }
+
+    pub fn stop(&self) {
+        // Mock implementation for transpilation
+    }
+
+    pub fn pause(&self) {
+        // Mock implementation for transpilation
+    }
+
+    pub fn resume(&self) {
+        // Mock implementation for transpilation
+    }
+
+    /// Events: "dataavailable" (BlobEvent), "stop", "error" (Event).
+    pub fn addEventListener<F, E>(&self, _event_type: &str, _listener: F)
+    where
+        F: Fn(E) + 'static,
+    {
+        // Mock implementation for transpilation
+    }
+}
+
+/// An audio-graph node (from AudioContext::createMediaStreamSource etc.).
+// #[js_type] - Browser built-in, do not export
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AudioNode {
+    pub numberOfInputs: u32,
+    pub numberOfOutputs: u32,
+}
+
+impl AudioNode {
+    pub fn new() -> Self {
+        Self {
+            numberOfInputs: 1,
+            numberOfOutputs: 1,
+        }
+    }
+
+    /// Connect this node's output to `destination` (any node-shaped type).
+    pub fn connect<N>(&self, _destination: &N) {
+        // Mock implementation for transpilation
+    }
+
+    pub fn disconnect(&self) {
+        // Mock implementation for transpilation
+    }
+}
+
+/// AudioContext.createMediaStreamDestination(): everything connected to it
+/// comes out as `.stream` (a MediaStream with one mixed audio track).
+// #[js_type] - Browser built-in, do not export
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MediaStreamAudioDestinationNode {
+    pub stream: MediaStream,
+}
+
+impl MediaStreamAudioDestinationNode {
+    pub fn new() -> Self {
+        Self {
+            stream: MediaStream::new(),
+        }
+    }
+
+    /// Node-shaped so it can also be a `connect` destination in generic code.
+    pub fn disconnect(&self) {
+        // Mock implementation for transpilation
+    }
+}
+
+// #[js_type] - Browser built-in, do not export
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AudioContext {
+    /// "suspended" | "running" | "closed"
+    pub state: String,
+}
+
+impl AudioContext {
+    pub fn new() -> Self {
+        Self {
+            state: "running".to_string(),
+        }
+    }
+
+    pub fn createMediaStreamSource(&self, _stream: &MediaStream) -> AudioNode {
+        AudioNode::new()
+    }
+
+    pub fn createMediaStreamDestination(&self) -> MediaStreamAudioDestinationNode {
+        MediaStreamAudioDestinationNode::new()
+    }
+
+    pub fn resume(&self) -> Promise<()> {
+        Promise::new()
+    }
+
+    pub fn close(&self) {
+        // Mock implementation for transpilation
+    }
+}
+
 // Tests for the WebRTC/JSON API surface added for mojes-conf.
 #[cfg(test)]
 mod tests_conf_api {
@@ -3141,6 +3353,48 @@ mod tests_conf_api {
         let d = Desc { r#type: "offer".into(), sdp: "v=0".into() };
         let _ = pc.setLocalDescription(&d);
         let _ = pc.setRemoteDescription(&d);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn canvas_recorder_webaudio_streaming_pipeline() {
+        // The full client-side live-streaming pipeline type-checks:
+        // canvas compositing -> captureStream + WebAudio mix -> MediaRecorder
+        // -> binary chunks over WebSocket.
+        let canvas = document.createElement("canvas");
+        let mut ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#000".to_string();
+        ctx.fillRect(0.0, 0.0, 1280.0, 720.0);
+        ctx.drawImage(&canvas, 0.0, 0.0, 640.0, 360.0);
+
+        let mut mixed = canvas.captureStream(30.0);
+        let actx = AudioContext::new();
+        let dest = actx.createMediaStreamDestination();
+        let src = actx.createMediaStreamSource(&MediaStream::new());
+        src.connect(&dest);
+        for t in dest.stream.getAudioTracks() {
+            mixed.addTrack(t);
+        }
+
+        #[derive(serde::Serialize)]
+        struct Opts {
+            mimeType: String,
+        }
+        let rec = MediaRecorder::new(
+            &mixed,
+            &Opts {
+                mimeType: "video/webm;codecs=vp8,opus".into(),
+            },
+        );
+        assert_eq!(rec.state, "inactive");
+        rec.start(250);
+        let ws = WebSocket::new("wss://example/ws-stream").unwrap();
+        // Text and binary sends both compile.
+        ws.send("{\"key\":\"k\"}");
+        rec.addEventListener("dataavailable", move |ev: BlobEvent| {
+            ws.send(&ev.data);
+        });
+        rec.stop();
     }
 
     #[test]
