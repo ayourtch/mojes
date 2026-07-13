@@ -504,7 +504,11 @@ fn test_struct_instantiation() {
     println!("DEBUG test_struct_instantiation js code: {}", &result);
     assert!(result.contains("10"));
     assert!(result.contains("20"));
-    assert!(result.starts_with("new Point(") && result.ends_with(")"));
+    // Named-assignment construction: field order in the literal no longer
+    // needs to match the (positional) constructor's declaration order.
+    assert!(result.contains("new Point()"), "got: {result}");
+    assert!(result.contains("obj.x = 10"), "got: {result}");
+    assert!(result.contains("obj.y = 20"), "got: {result}");
 }
 
 #[test]

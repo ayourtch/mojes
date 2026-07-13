@@ -258,7 +258,8 @@ fn transpile_function(
         span: DUMMY_SP,
         body: Some(function_body),
         is_generator: false,
-        is_async: false,
+        // async fns keep their asyncness (their bodies contain await)
+        is_async: item_fn.sig.asyncness.is_some(),
         type_params: None,
         return_type: None,
         ctxt: SyntaxContext::empty(),

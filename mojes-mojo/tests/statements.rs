@@ -577,7 +577,10 @@ fn test_struct_operations_in_statements() {
         "DEBUG test_struct_operations_in_statements code: {}",
         &js_code
     );
-    assert!(js_code.contains("const point = new Point(10, 20)"));
+    // Named-assignment construction (order-independent).
+    assert!(js_code.contains("new Point()"), "got: {js_code}");
+    assert!(js_code.contains("obj.x = 10"), "got: {js_code}");
+    assert!(js_code.contains("obj.y = 20"), "got: {js_code}");
     assert!(js_code.contains("const x_coord = point.x"));
     assert!(js_code.contains("return x_coord;"));
 }

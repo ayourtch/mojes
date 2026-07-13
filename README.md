@@ -204,29 +204,41 @@ Supported (exercised by the test suite under `mojes-mojo/tests/` and
 
 Not supported (see [`JS_COVERAGE_REPORT.md`](JS_COVERAGE_REPORT.md) §9 and
 [`BLOCKS.md`](BLOCKS.md) for details): traits/generics in transpiled code,
-match guards (`arm if cond =>`), labeled loops,
-`continue` (transpiles incorrectly — avoid), iterators/generators,
+match guards (`arm if cond =>`), labeled loops, iterators/generators,
 class inheritance, spread/rest, regexes, `fetch`, ES modules. `match`
 compiles to `if`/`else` chains, and `HashMap` becomes a plain object, not a
-`Map`.
+`Map`. (`continue` works, including inside `.enumerate()` loops.)
 
 ### Gotchas
 
-Learned the hard way while building a real client — the transpiled Rust
-compiles fine but the JS misbehaves:
+The sharpest edges have been fixed and are now covered by tests
+(`mojes-mojo/tests/test_gotcha_fixes.rs`) — kept here for the record since
+older writeups warn about them:
 
-- **No `match` around `.await`.** Match arms are transpiled into non-async
-  IIFEs, so an `.await` inside a match arm breaks. On async paths use
-  if-chains with `unwrap_or`/`is_some` instead.
-- **Struct literals must list fields in declaration order.** The generated JS
-  constructor is positional; `Counter { label, count }` would silently swap
-  the arguments.
-- **Use `"".to_string()`, not `String::new()`.** The latter transpiles to
-  `new String()`, a boxed object rather than a string primitive, and `===`
-  comparisons against it fail.
-- Conditional (`if`/`else`) expressions used directly inside `format!`
-  arguments have historically produced `undefined` — see
-  [`BLOCKS.md`](BLOCKS.md). Bind them to a `let` first.
+- ~~No `match` around `.await`~~ — **fixed**: arm IIFEs containing `.await`
+  become `async` and are awaited, and the async-ness propagates out to the
+  transpiled `async function`, so match/if-let around `.await` yields the
+  value, not a Promise.
+- ~~Struct literals must list fields in declaration order~~ — **fixed**:
+  literals construct via named assignments
+  (`(() => { const obj = new Counter(); obj.label = ...; return obj; })()`),
+  so `Counter { label, count }` and `Counter { count, label }` are identical.
+- ~~`String::new()` becomes a boxed `new String()`~~ — **fixed**: it is now
+  the string primitive `""`.
+- ~~`if`/`else` directly inside `format!` arguments produced `undefined`~~ —
+  **fixed** by the `_rust_retval` pattern (see [`BLOCKS.md`](BLOCKS.md)).
+
+Still worth knowing:
+
+- **Unmapped methods pass through silently.** A method call the transpiler
+  does not know (`recv.foo(x)`) is emitted verbatim as `recv.foo(x)`. That is
+  exactly right for DOM/browser APIs and exactly wrong for Rust-only methods —
+  if something "does nothing" in the browser, check the generated JS for a
+  method that does not exist there.
+- **Rust's numeric types collapse to JS `number`** — no integer overflow,
+  `usize` etc. are all doubles.
+- **`.parse()` accepts what `Number()` accepts** (plus a rejected
+  empty/whitespace string) — slightly laxer than Rust (`"0x10"` parses).
 
 Since the output is generated at compile time, a cheap end-to-end sanity check
 is to dump the JS and parse it with node:

@@ -480,7 +480,21 @@ impl TranspilerState {
 
         // Use .call(this) with traditional function (this will work properly)
         let call_expr = self.mk_member_expr(wrapped_fn, "call");
-        self.mk_call_expr(call_expr, vec![self.mk_this_expr()])
+        let call = self.mk_call_expr(call_expr, vec![self.mk_this_expr()]);
+        if is_async {
+            // An async IIFE returns a Promise; the surrounding code expects
+            // the value (e.g. a match arm containing .await), so await it.
+            // The await also marks the ENCLOSING IIFE async (via
+            // stmts_contain_await), propagating async-ness up to the
+            // transpiled `async function` - which is guaranteed to exist,
+            // because Rust only allows .await inside async fns.
+            js::Expr::Await(js::AwaitExpr {
+                span: DUMMY_SP,
+                arg: Box::new(call),
+            })
+        } else {
+            call
+        }
     }
     pub fn mk_var_decl(&self, name: &str, init: Option<js::Expr>, is_const: bool) -> js::Stmt {
         let kind = if is_const {
@@ -3331,6 +3345,11 @@ fn handle_function_call(
                                 elems: vec![],
                             }));
                         }
+                        "String" => {
+                            // String::new() becomes "" - NOT `new String()`,
+                            // which is a boxed object that fails === checks.
+                            return Ok(state.mk_str_lit(""));
+                        }
                         "Self" => {
                             // Self::new() in struct context should use object literal pattern
                             if let Some(current_struct) = state.get_current_struct_name() {
@@ -5408,11 +5427,13 @@ fn convert_for_to_stmt_enhanced(
             let body_stmts =
                 rust_block_to_js_with_state(BlockAction::NoReturn, &for_expr.body, state)?;
 
-            // Generate: let i = 0; for (const item of collection) { body; i++; }
+            // Generate: let i = -1; for (const item of collection) { i++; body; }
+            // The increment is FIRST in the body (starting from -1) so a
+            // `continue` in the body cannot skip it and freeze the index.
             let mut stmts = vec![
-                // let i = 0;
-                state.mk_var_decl(&js_index_var, Some(state.mk_num_lit(0.0)), false),
-                // for (const item of collection) { body; i++; }
+                // let i = -1;
+                state.mk_var_decl(&js_index_var, Some(state.mk_num_lit(-1.0)), false),
+                // for (const item of collection) { i++; body; }
                 js::Stmt::ForOf(js::ForOfStmt {
                     span: DUMMY_SP,
                     is_await: false,
@@ -5435,14 +5456,18 @@ fn convert_for_to_stmt_enhanced(
                     body: Box::new(js::Stmt::Block(js::BlockStmt {
                         span: DUMMY_SP,
                         stmts: {
-                            let mut loop_stmts = body_stmts;
-                            // Add i++ at the end
-                            loop_stmts.push(state.mk_expr_stmt(js::Expr::Update(js::UpdateExpr {
-                                span: DUMMY_SP,
-                                op: js::UpdateOp::PlusPlus,
-                                prefix: false,
-                                arg: Box::new(js::Expr::Ident(state.mk_ident(&js_index_var))),
-                            })));
+                            // i++ first, so `continue` in the body keeps
+                            // the enumeration index correct.
+                            let mut loop_stmts =
+                                vec![state.mk_expr_stmt(js::Expr::Update(js::UpdateExpr {
+                                    span: DUMMY_SP,
+                                    op: js::UpdateOp::PlusPlus,
+                                    prefix: false,
+                                    arg: Box::new(js::Expr::Ident(
+                                        state.mk_ident(&js_index_var),
+                                    )),
+                                }))];
+                            loop_stmts.extend(body_stmts);
                             loop_stmts
                         },
                         ctxt: SyntaxContext::empty(),
@@ -6282,34 +6307,83 @@ fn handle_struct_expr(
                 }))
             }
         } else {
-            // This is a regular struct, use original constructor pattern
-            // Convert field initializers to constructor arguments
-            let args: Result<Vec<_>, _> = struct_expr
-                .fields
-                .iter()
-                .map(|field| rust_expr_to_js_with_state(&field.expr, state))
-                .collect();
-
-            let js_args = args?;
-
-            // Create new constructor call
-            let constructor = js::Expr::Ident(state.mk_ident(&struct_name));
-
-            Ok(js::Expr::New(js::NewExpr {
+            // Regular struct literal. The generated JS class constructor is
+            // positional in DECLARATION order, which the expression site does
+            // not know - so never construct positionally from source order
+            // (Counter { label, count } would silently swap arguments).
+            // Instead assign each field by name:
+            //   (() => { const obj = new Counter(); obj.label = ...; return obj; })()
+            let constructor_call = js::Expr::New(js::NewExpr {
                 span: DUMMY_SP,
-                callee: Box::new(constructor),
-                args: Some(
-                    js_args
-                        .into_iter()
-                        .map(|expr| js::ExprOrSpread {
-                            spread: None,
-                            expr: Box::new(expr),
-                        })
-                        .collect(),
-                ),
+                callee: Box::new(js::Expr::Ident(state.mk_ident(&struct_name))),
+                args: Some(vec![]),
                 type_args: None,
                 ctxt: SyntaxContext::empty(),
-            }))
+            });
+            let mut stmts = vec![state.mk_var_decl("obj", Some(constructor_call), true)];
+            for field in &struct_expr.fields {
+                if let syn::Member::Named(field_name) = &field.member {
+                    let field_name_str = field_name.to_string();
+                    let clean_field_name = field_name_str
+                        .strip_prefix("r#")
+                        .unwrap_or(&field_name_str)
+                        .to_string();
+                    let field_value = rust_expr_to_js_with_state(&field.expr, state)?;
+                    let obj_access = state.mk_member_expr(
+                        js::Expr::Ident(state.mk_ident("obj")),
+                        &clean_field_name,
+                    );
+                    let assignment = js::Expr::Assign(js::AssignExpr {
+                        span: DUMMY_SP,
+                        op: js::AssignOp::Assign,
+                        left: state.expr_to_assign_target(obj_access)?,
+                        right: Box::new(field_value),
+                    });
+                    stmts.push(js::Stmt::Expr(js::ExprStmt {
+                        span: DUMMY_SP,
+                        expr: Box::new(assignment),
+                    }));
+                }
+            }
+            stmts.push(js::Stmt::Return(js::ReturnStmt {
+                span: DUMMY_SP,
+                arg: Some(Box::new(js::Expr::Ident(state.mk_ident("obj")))),
+            }));
+            // A field value may contain .await (legal in an async fn); the
+            // IIFE must then be async and awaited, like mk_iife does.
+            let is_async = stmts_contain_await(&stmts);
+            let iife_func = js::ArrowExpr {
+                span: DUMMY_SP,
+                params: vec![],
+                body: Box::new(js::BlockStmtOrExpr::BlockStmt(js::BlockStmt {
+                    span: DUMMY_SP,
+                    stmts,
+                    ctxt: SyntaxContext::empty(),
+                })),
+                is_async,
+                is_generator: false,
+                type_params: None,
+                return_type: None,
+                ctxt: SyntaxContext::empty(),
+            };
+            let call = js::Expr::Call(js::CallExpr {
+                span: DUMMY_SP,
+                callee: js::Callee::Expr(Box::new(js::Expr::Paren(js::ParenExpr {
+                    span: DUMMY_SP,
+                    expr: Box::new(js::Expr::Arrow(iife_func)),
+                }))),
+                args: vec![],
+                type_args: None,
+                ctxt: SyntaxContext::empty(),
+            });
+            Ok(if is_async {
+                js::Expr::Await(js::AwaitExpr {
+                    span: DUMMY_SP,
+                    arg: Box::new(call),
+                })
+            } else {
+                call
+            })
         }
     }
 }

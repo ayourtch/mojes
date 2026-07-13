@@ -151,8 +151,9 @@ mod tests_dom {
         let js_code = rust_block_to_js(&block);
         println!("DEBUG manual counter for loop: {}", &js_code);
 
-        // Should use manual counter approach
-        assert!(js_code.contains("let i = 0;"));
+        // Manual counter: starts at -1, incremented FIRST in the body so
+        // `continue` cannot freeze the index.
+        assert!(js_code.contains("let i = -1;"));
         assert!(js_code.contains("i++;"));
         assert!(!js_code.contains("(function()")); // No IIFE wrapper
 
